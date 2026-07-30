@@ -1,0 +1,12 @@
+[submodule "third_party/algorithms/unidepth"]
+	path = third_party/algorithms/unidepth
+	url = https://github.com/lpiccinelli-eth/UniDepth.git
+[submodule "third_party/algorithms/wilor"]
+	path = third_party/algorithms/wilor
+	url = https://github.com/rolpotamias/WiLoR.git
+[submodule "third_party/algorithms/hawor"]
+	path = third_party/algorithms/hawor
+	url = https://github.com/ThunderVVV/HaWoR.git
+[submodule "third_party/algorithms/vggt"]
+	path = third_party/algorithms/vggt
+	url = https://github.com/facebookresearch/vggt.git

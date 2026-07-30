@@ -1,3 +1,0 @@
-# ego-server
-test
-test

@@ -1,0 +1,66 @@
+{
+  "schema": "ego.annotation.feishu_ray_services_profile.v1",
+  "profile": "feishu_ray_a800_server_local",
+  "description": "Canonical routes for the currently deployed Feishu Ray services. This profile records configuration only; it is not a health or availability claim.",
+  "state": {
+    "network_scope": "A800 server-local",
+    "health_claim": false
+  },
+  "health_route": "/-/healthz",
+  "services": {
+    "unidepth": {
+      "base_url": "http://127.0.0.1:28000",
+      "routes": [
+        "/unidepth.infer"
+      ]
+    },
+    "hands_wilor": {
+      "base_url": "http://127.0.0.1:28001",
+      "routes": [
+        "/hands.detect"
+      ]
+    },
+    "wilor": {
+      "base_url": "http://127.0.0.1:28004",
+      "routes": [
+        "/wilor.reconstruct"
+      ]
+    },
+    "droid": {
+      "base_url": "http://127.0.0.1:28002",
+      "routes": [
+        "/droid.create_session",
+        "/droid.push_frame",
+        "/droid.finalize"
+      ],
+      "model_revision": "droid-v1",
+      "pinned_service_release": "9c989fadce9f02ff02dbc9ff8e8075e86d0a0513",
+      "canonical_semantics": {
+        "stateful_lifecycle": "one create_session, ordered push_frame for every source frame, one finalize",
+        "camera_intrinsics": "camera.intrinsics is model-grid [fx,fy,cx,cy]; camera.K_px retains source-grid K_px",
+        "request_rgb": "uint8 HWC RGB on the target-area model grid",
+        "request_mask": "float32 model-grid positive=ignore dynamic mask"
+      },
+      "deployed_compatibility_semantics": {
+        "rgb_channel_compensation": "channel-symmetric grayscale makes the deployed extra R/B reversal invariant",
+        "dynamic_pixel_compensation": "zero every pixel where the submitted dynamic-ignore mask is positive",
+        "mask_polarity_compensation": "submit positive=ignore without inversion",
+        "motion_filter_mode": "use upstream keyframe selection with per-frame keyframe_added validity",
+        "dense_timeline": "service records every admitted source frame in dense_source for trajectory filling"
+      }
+    },
+    "hawor": {
+      "base_url": "http://127.0.0.1:28003",
+      "routes": [
+        "/hawor.infer_tracks",
+        "/hawor_infiller.fill"
+      ]
+    },
+    "cosmos3": {
+      "base_url": "http://127.0.0.1:28006",
+      "routes": [
+        "/cosmos3.reason"
+      ]
+    }
+  }
+}

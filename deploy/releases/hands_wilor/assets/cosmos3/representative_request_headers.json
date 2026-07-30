@@ -1,0 +1,5 @@
+{
+  "Content-Type": "multipart/form-data; boundary=egocosmos3-39c9e0b910284fbdbfb2bfaa8bd69be3",
+  "endpoint": "http://127.0.0.1:28006/cosmos3.reason",
+  "payload_sha256": "6842f3be595a1ddaace6777caf780c37ef568bede884f4d0c4d0ee86536a8ba4"
+}

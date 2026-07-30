@@ -1,0 +1,39 @@
+{
+  "schema": "v21_parallel_runtime_profile.v1",
+  "default_parallelism": 64,
+  "remote": {
+    "ssh_command": "ssh -p 57938 zjh@115.190.235.210",
+    "host": "115.190.235.210",
+    "port": 57938,
+    "user": "zjh",
+    "repo_root": "~/ego-annotaion-jiahong-dev",
+    "data_base": "~/data",
+    "batch_root_base": "~/data/v21_parallel_runs",
+    "tmux_session": "ego_annotation"
+  },
+  "dataset": {
+    "name": "egoscale_30h",
+    "base": "~/data",
+    "root_candidates": [
+      "~/data/egoscale 30h",
+      "~/data/egoscale_30h",
+      "~/data/egoscale-30h",
+      "~/data/egoscale30h",
+      "~/data/EgoScale 30h",
+      "~/data/EgoScale_30h"
+    ]
+  },
+  "gpu_wrapper": {
+    "script": "scripts/v21_gpu_wrapper.py",
+    "default_poll_s": 15,
+    "default_reserve_mb": 1024,
+    "lock_dir": "/tmp/v21_gpu_wrapper_locks"
+  },
+  "runner": {
+    "manager_prompt": ".pi/prompts/v21_parallel.md",
+    "runner_prompt": ".pi/prompts/v21_parallel_runner.md",
+    "claim_script": "scripts/v21_parallel_claim_next.py",
+    "launcher_script": "scripts/launch_v21_parallel_agents.py",
+    "manifest_builder": "scripts/build_v21_parallel_manifest.py"
+  }
+}

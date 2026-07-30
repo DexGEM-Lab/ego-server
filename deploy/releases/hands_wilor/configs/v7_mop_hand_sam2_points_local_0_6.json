@@ -1,0 +1,71 @@
+{
+  "track_id": "right_visible_gloved_hand_holding_mop",
+  "object": "right gloved hand holding the mop handle",
+  "source_frame_start": 759,
+  "source_frame_end": 765,
+  "local_frame_mapping": {
+    "0": 759,
+    "1": 760,
+    "2": 761,
+    "3": 762,
+    "4": 763,
+    "5": 764,
+    "6": 765
+  },
+  "point_prompts": [
+    {
+      "frame_idx": 0,
+      "source_frame_idx": 759,
+      "positive_points": [
+        {"x": 837, "y": 868},
+        {"x": 764, "y": 931},
+        {"x": 893, "y": 974},
+        {"x": 772, "y": 1030}
+      ],
+      "negative_points": [
+        {"x": 908, "y": 755},
+        {"x": 831, "y": 721},
+        {"x": 1020, "y": 971},
+        {"x": 1084, "y": 682},
+        {"x": 1197, "y": 1030},
+        {"x": 718, "y": 790}
+      ]
+    },
+    {
+      "frame_idx": 3,
+      "source_frame_idx": 762,
+      "positive_points": [
+        {"x": 832, "y": 860},
+        {"x": 760, "y": 922},
+        {"x": 885, "y": 961},
+        {"x": 771, "y": 1022}
+      ],
+      "negative_points": [
+        {"x": 910, "y": 744},
+        {"x": 828, "y": 707},
+        {"x": 1018, "y": 957},
+        {"x": 1085, "y": 671},
+        {"x": 1198, "y": 1018},
+        {"x": 715, "y": 780}
+      ]
+    },
+    {
+      "frame_idx": 6,
+      "source_frame_idx": 765,
+      "positive_points": [
+        {"x": 831, "y": 853},
+        {"x": 760, "y": 914},
+        {"x": 880, "y": 949},
+        {"x": 770, "y": 1014}
+      ],
+      "negative_points": [
+        {"x": 907, "y": 736},
+        {"x": 827, "y": 699},
+        {"x": 1013, "y": 945},
+        {"x": 1083, "y": 664},
+        {"x": 1197, "y": 1004},
+        {"x": 715, "y": 772}
+      ]
+    }
+  ]
+}

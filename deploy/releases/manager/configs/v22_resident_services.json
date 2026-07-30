@@ -1,0 +1,22 @@
+{
+  "schema": "ego.annotation.resident_services_config.v1",
+  "repository_branch": "feat/parallel",
+  "host": "127.0.0.1",
+  "archive_only": true,
+  "deployment_state": "withdrawn",
+  "enabled": false,
+  "authoritative_runtime": "feishu_ray_serve",
+  "conflict_policy": "refuse_if_ports_or_gpu_occupied",
+  "start_opt_in_env": "V22_ARCHIVED_DEPLOYMENT_OPT_IN",
+  "stop_opt_in_env": "V22_ARCHIVED_DEPLOYMENT_STOP",
+  "wait_window_s": 20.0,
+  "pending_request_limit": 1024,
+  "logical_wave_batch_size": 32,
+  "logical_wave_emission_limit_s": 5.0,
+  "services": {
+    "unidepth": {"port": 18101, "gpu": 0, "python": "/home/zjh/miniconda3/envs/ego_foundation/bin/python", "native_batch_cap": 32},
+    "wilor": {"port": 18102, "gpu": 1, "python": "/home/zjh/miniconda3/envs/hamer/bin/python", "native_batch_cap": 128},
+    "hawor": {"port": 18103, "gpu": 2, "python": "/home/zjh/miniconda3/envs/hawor/bin/python", "native_batch_cap": 8},
+    "vggt": {"port": 18104, "gpu": 3, "python": "/home/zjh/ego_annotation_checkpoint/vggt/env/bin/python", "native_batch_cap": 2}
+  }
+}

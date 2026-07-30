@@ -1,0 +1,108 @@
+{
+  "triposg": {
+    "root": "/data2/ego_annotation_outputs/v7_triposg_prior_outputs/generated_meshes",
+    "mesh_globs": [
+      "*/triposg_mesh.ply"
+    ],
+    "case_targets": {
+      "wild_rice_2539": "wild_rice",
+      "wild_rice_2545": "wild_rice",
+      "trash_0880": "trash",
+      "mop_0750": "mop",
+      "mop_0759": "mop"
+    }
+  },
+  "hunyuan": {
+    "root": "/data2/ego_annotation_outputs/v7_hunyuan_prior_outputs",
+    "mesh_globs": [
+      "**/*.glb",
+      "**/*.ply",
+      "**/*.obj"
+    ],
+    "case_targets": {
+      "frame2539": "wild_rice",
+      "frame2545": "wild_rice",
+      "wild_rice_2539_single": "wild_rice",
+      "wild_rice_2545_single": "wild_rice",
+      "trash_0880_single": "trash",
+      "mop_0750_single": "mop",
+      "mop_0759_single": "mop"
+    }
+  },
+  "hunyuan21": {
+    "root": "/data2/ego_annotation_outputs/v7_hunyuan21_prior_outputs/generated_meshes",
+    "mesh_globs": [
+      "*/hunyuan21_mesh.ply"
+    ],
+    "case_targets": {
+      "wild_rice_2539": "wild_rice",
+      "wild_rice_2545": "wild_rice",
+      "trash_0880": "trash",
+      "mop_0750": "mop",
+      "mop_0759": "mop"
+    }
+  },
+  "instantmesh": {
+    "root": "/data2/ego_annotation_outputs/v7_instantmesh_prior_outputs/generated/instant-mesh-large/meshes",
+    "mesh_globs": [
+      "*.obj"
+    ],
+    "case_targets": {
+      "wild_rice_2539": "wild_rice",
+      "wild_rice_2545": "wild_rice",
+      "trash_0880": "trash",
+      "mop_0750": "mop",
+      "mop_0759": "mop"
+    }
+  },
+  "spar3d": {
+    "root": "/data2/ego_annotation_outputs/v7_spar3d_prior_outputs/generated_meshes",
+    "mesh_globs": [
+      "*/spar3d_mesh.ply"
+    ],
+    "case_targets": {
+      "wild_rice_2539": "wild_rice",
+      "wild_rice_2545": "wild_rice",
+      "trash_0880": "trash",
+      "mop_0750": "mop",
+      "mop_0759": "mop"
+    }
+  },
+  "pixal3d": {
+    "root": "/data2/ego_annotation_outputs/v7_pixal3d_prior_outputs/generated_meshes",
+    "mesh_globs": [
+      "*/pixal3d_mesh.ply"
+    ],
+    "case_targets": {
+      "wild_rice_2539": "wild_rice",
+      "wild_rice_2545": "wild_rice",
+      "trash_0880": "trash",
+      "mop_0750": "mop",
+      "mop_0759": "mop"
+    }
+  },
+  "sam3d_objects": {
+    "root": "/data2/ego_annotation_outputs/v7_sam3d_objects_outputs/generated_meshes",
+    "mesh_globs": [
+      "*/sam3d_mesh.ply"
+    ],
+    "case_targets": {
+      "wild_rice_2539": "wild_rice",
+      "wild_rice_2545": "wild_rice",
+      "trash_0880": "trash",
+      "mop_0759": "mop"
+    }
+  },
+  "partcrafter": {
+    "root": "/data2/ego_annotation_outputs/v7_partcrafter_prior_outputs/generated_meshes",
+    "mesh_globs": [
+      "*/partcrafter_mesh.ply"
+    ],
+    "case_targets": {
+      "wild_rice_2539": "wild_rice",
+      "wild_rice_2545": "wild_rice",
+      "trash_0880": "trash",
+      "mop_0759": "mop"
+    }
+  }
+}

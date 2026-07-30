@@ -1,0 +1,85 @@
+{
+  "track_id": "visible_lower_mop_handle_at_grasp",
+  "description": "the visible lower pale mop handle and adjacent handle surface at the gloved grasp",
+  "object_plan": "Segment only the missing visible lower handle/grip section of the same mop. Exclude the gloved hand, wrist, shoe covers, legs, floor, sofa, table, and the mop head already covered by the parent object mask.",
+  "prompt_image_width": 1920,
+  "source_frame_start": 759,
+  "source_frame_end": 765,
+  "local_frame_mapping": {
+    "0": 759,
+    "1": 760,
+    "2": 761,
+    "3": 762,
+    "4": 763,
+    "5": 764,
+    "6": 765
+  },
+  "point_prompts": [
+    {
+      "frame_idx": 0,
+      "source_frame_idx": 759,
+      "target_visible": true,
+      "confidence": 1.0,
+      "visual_evidence": "The pale lower handle is visible between the shaft and the gloved hand.",
+      "positive_points": [
+        {"x": 805, "y": 724},
+        {"x": 795, "y": 780},
+        {"x": 786, "y": 835},
+        {"x": 770, "y": 916}
+      ],
+      "negative_points": [
+        {"x": 842, "y": 872},
+        {"x": 900, "y": 952},
+        {"x": 720, "y": 902},
+        {"x": 878, "y": 640},
+        {"x": 925, "y": 520},
+        {"x": 1055, "y": 780},
+        {"x": 620, "y": 810}
+      ]
+    },
+    {
+      "frame_idx": 3,
+      "source_frame_idx": 762,
+      "target_visible": true,
+      "confidence": 1.0,
+      "visual_evidence": "The pale lower handle is visible between the shaft and the gloved hand.",
+      "positive_points": [
+        {"x": 805, "y": 722},
+        {"x": 795, "y": 776},
+        {"x": 786, "y": 828},
+        {"x": 770, "y": 906}
+      ],
+      "negative_points": [
+        {"x": 842, "y": 862},
+        {"x": 900, "y": 942},
+        {"x": 720, "y": 892},
+        {"x": 878, "y": 636},
+        {"x": 925, "y": 520},
+        {"x": 1055, "y": 770},
+        {"x": 620, "y": 804}
+      ]
+    },
+    {
+      "frame_idx": 6,
+      "source_frame_idx": 765,
+      "target_visible": true,
+      "confidence": 1.0,
+      "visual_evidence": "The pale lower handle is visible between the shaft and the gloved hand.",
+      "positive_points": [
+        {"x": 805, "y": 714},
+        {"x": 795, "y": 768},
+        {"x": 786, "y": 819},
+        {"x": 770, "y": 896}
+      ],
+      "negative_points": [
+        {"x": 842, "y": 852},
+        {"x": 900, "y": 932},
+        {"x": 720, "y": 884},
+        {"x": 878, "y": 628},
+        {"x": 925, "y": 512},
+        {"x": 1055, "y": 760},
+        {"x": 620, "y": 796}
+      ]
+    }
+  ]
+}

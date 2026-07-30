@@ -1,0 +1,36 @@
+{
+  "algorithms": {
+    "unidepth": {
+      "sample_command": [
+        "python",
+        "scripts/run_unidepth_request.py",
+        "--request",
+        "{request_json}"
+      ]
+    },
+    "wilor": {
+      "sample_command": [
+        "python",
+        "scripts/run_wilor_request.py",
+        "--request",
+        "{request_json}"
+      ]
+    },
+    "droid": {
+      "sample_command": [
+        "python",
+        "scripts/run_droid_request.py",
+        "--request",
+        "{request_json}"
+      ]
+    },
+    "hawor": {
+      "sample_command": [
+        "python",
+        "scripts/run_hawor_request.py",
+        "--request",
+        "{request_json}"
+      ]
+    }
+  }
+}

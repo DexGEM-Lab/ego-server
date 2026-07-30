@@ -1,0 +1,68 @@
+{
+  "wild_rice": {
+    "observed_mesh_archive": "/data2/ego_annotation_outputs/representative_wild_rice/v6_completed_plus_verified_repair2539_2520_2550/solidified_sheet_object_meshes_world.npz",
+    "manifest": "/data2/ego_annotation_outputs/representative_wild_rice/v6_completed_plus_verified_repair2539_2520_2550/manifest.json",
+    "annotations": "/data2/ego_annotation_outputs/representative_wild_rice/v3_vggt_hawor_rtmlib_refit_pruned_object_2520_2550/annotations_v3_vggt_hawor_rtmlib_refit.json",
+    "metric_depth_npz": "/data2/ego_annotation_outputs/representative_wild_rice/v3_unidepth_full_frame_2520_2550/unidepth_full_frame_depth_v3.npz",
+    "frame_start": 2538,
+    "frame_end": 2540,
+    "intrinsics_source": "annotation-vggt",
+    "physics_intrinsics_source": "annotation-vggt",
+    "baseline_zbuffer_json": "/data2/ego_annotation_outputs/representative_wild_rice/v7_generated_prior_replay_trellis_negative_control_guarded_2538_2540/observed_target_zbuffer_qc/qc_mesh_zbuffer_projection_v3.json",
+    "track_qc": {
+      "pair_factors_json": "/data2/ego_annotation_outputs/representative_wild_rice/v7_cotracker_multianchor5_repaired_archive_merged_pair_factors_2532_2550/qc_merged_pair_factors_v7.json",
+      "frame_start": 2538,
+      "frame_end": 2540,
+      "min_tracks": 24,
+      "min_edges": 24,
+      "max_pair_factor_residual_m": 0.012,
+      "max_track_surface_distance_m": 0.012,
+      "max_pair_residual_p95_m": 0.009,
+      "max_correction_displacement_p95_m": 0.002
+    }
+  },
+  "trash": {
+    "observed_mesh_archive": "/data2/ego_annotation_outputs/representative_trash/v3_observed_unidepth_vggtK_solidified_perframe_thick001_865_870/solidified_sheet_object_meshes_world.npz",
+    "manifest": "/data2/ego_annotation_outputs/representative_trash/v3_samwise_pink_lid_bundlesdf_dataset_858_880/manifest.json",
+    "annotations": "/data2/ego_annotation_outputs/representative_trash/v3_mano_side_metric_refit_858_880/annotations_side_metric_refit.json",
+    "metric_depth_npz": "/data2/ego_annotation_outputs/representative_trash/v3_unidepth_metric_source_858_880/unidepth_metric_depth_v3.npz",
+    "frame_start": 865,
+    "frame_end": 870,
+    "intrinsics_source": "annotation-vggt",
+    "physics_intrinsics_source": "annotation-vggt",
+    "baseline_zbuffer_json": "/data2/ego_annotation_outputs/representative_trash/v7_generated_prior_replay_trellis_frame880_guarded_865_870/observed_target_zbuffer_qc/qc_mesh_zbuffer_projection_v3.json",
+    "track_qc": {
+      "pair_factors_json": "/data2/ego_annotation_outputs/v7_cotracker_factor_outputs/trash_865_870_localized/pair_factors/qc_cotracker_pairwise_rigid_factors_v6.json",
+      "frame_start": 865,
+      "frame_end": 870,
+      "min_tracks": 100,
+      "min_edges": 400,
+      "max_pair_factor_residual_m": 0.012,
+      "max_track_surface_distance_m": 0.012,
+      "max_pair_residual_p95_m": 0.009,
+      "max_correction_displacement_p95_m": 0.002
+    }
+  },
+  "mop": {
+    "observed_mesh_archive": "/data2/ego_annotation_outputs/representative_mop/v7_mop_observed_surface_contract_unidepth_vggt_stride1_759_765/observed_mask_depth_meshes_world.npz",
+    "manifest": "/data2/ego_annotation_outputs/representative_mop/v3_mop_depth_manifold_dataset_735_765/manifest.json",
+    "annotations": "/data2/ego_annotation_outputs/representative_mop/v3_vggt_object_skeleton_735_765/annotations_v3_vggt_object_skeleton.json",
+    "metric_depth_npz": "/data2/ego_annotation_outputs/representative_mop/v3_unidepth_dense_735_765/unidepth_full_frame_depth_v3.npz",
+    "frame_start": 759,
+    "frame_end": 765,
+    "intrinsics_source": "annotation-vggt",
+    "physics_intrinsics_source": "annotation-vggt",
+    "baseline_zbuffer_json": "/data2/ego_annotation_outputs/representative_mop/v7_mop_observed_surface_contract_unidepth_vggt_stride1_zbuffer_759_765/qc_mesh_zbuffer_projection_v3.json",
+    "track_qc": {
+      "pair_factors_json": "/data2/ego_annotation_outputs/v7_cotracker_factor_outputs/mop_759_765_localized/pair_factors/qc_cotracker_pairwise_rigid_factors_v6.json",
+      "frame_start": 759,
+      "frame_end": 765,
+      "min_tracks": 40,
+      "min_edges": 200,
+      "max_pair_factor_residual_m": 0.012,
+      "max_track_surface_distance_m": 0.012,
+      "max_pair_residual_p95_m": 0.010,
+      "max_correction_displacement_p95_m": 0.002
+    }
+  }
+}

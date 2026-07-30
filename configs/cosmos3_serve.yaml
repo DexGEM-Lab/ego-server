@@ -1,0 +1,27 @@
+# GPU6 Cosmos3 candidate Serve configuration.
+# Serve's declarative config accepts only remote URI runtime_env working directories.
+# The GPU6 Ray head instead inherits PYTHONPATH=/home/zjh/cosmos3_ray_serve/workspace
+# from its pinned lifecycle, so every local worker imports this curated workspace
+# without an invalid local-path runtime_env declaration.
+http_options:
+  host: 0.0.0.0
+  port: 28006
+applications:
+- name: cosmos3
+  route_prefix: /
+  import_path: ego_annotation.serving.cosmos3_deployment:app
+  deployment_config:
+    ray_actor_options:
+      num_gpus: 1
+  deployments:
+  - name: cosmos3.reason
+    num_replicas: 1
+    ray_actor_options:
+      num_gpus: 1
+      runtime_env:
+        env_vars:
+          HF_HUB_OFFLINE: "1"
+          HF_HOME: /home/ylang/.cache/huggingface
+          EGO_COSMOS3_MODEL: /home/ylang/.cache/huggingface/hub/models--nvidia--Cosmos3-Nano/snapshots/411f42a8fdfb8c5b2583cb8786e0938f49796eaa
+    max_ongoing_requests: 16
+    max_queued_requests: 32

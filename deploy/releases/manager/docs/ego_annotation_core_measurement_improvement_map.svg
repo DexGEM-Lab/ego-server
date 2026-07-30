@@ -1,0 +1,260 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2800" height="1660" viewBox="0 0 2800 1660">
+  <defs>
+    <marker id="depArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#667085" fill-opacity="0.32"/></marker>
+    <style>
+      .title{font:700 34px sans-serif;fill:#101828}.subtitle{font:16px sans-serif;fill:#475467}.section{font:700 20px sans-serif;fill:#344054}.laneTitle{font:700 13px sans-serif;fill:#344054}.tiny{font:11px sans-serif;fill:#667085}
+      .num{font:700 16px sans-serif;fill:#101828}.nodeTitle{font:700 14px sans-serif;fill:#101828}.nodeText{font:12px sans-serif;fill:#344054}
+      .coreCluster{fill:#F6FEF9;stroke:#12B76A;stroke-width:2;stroke-dasharray:9 7}.supportCluster{fill:#FFF7ED;stroke:#F97316;stroke-width:2;stroke-dasharray:9 7}.renderCluster{fill:#F8FAFC;stroke:#98A2B3;stroke-width:2;stroke-dasharray:9 7}.lane{fill:#FFFFFF;stroke:#EAECF0;stroke-width:1}
+      .cat_semantic{fill:#FEF7C3;stroke:#EAAA08;stroke-width:1.8} .strip_semantic{fill:#EAAA08;fill-opacity:.90}
+      .cat_seg{fill:#E0F2FE;stroke:#0284C7;stroke-width:1.8} .strip_seg{fill:#0284C7;fill-opacity:.90}
+      .cat_depth{fill:#E6FFFB;stroke:#0E9384;stroke-width:1.8} .strip_depth{fill:#0E9384;fill-opacity:.90}
+      .cat_hand{fill:#F4EBFF;stroke:#7F56D9;stroke-width:1.8} .strip_hand{fill:#7F56D9;fill-opacity:.90}
+      .cat_mesh{fill:#ECFDF3;stroke:#12B76A;stroke-width:1.8} .strip_mesh{fill:#12B76A;fill-opacity:.90}
+      .cat_pose{fill:#EEF4FF;stroke:#6172F3;stroke-width:1.8} .strip_pose{fill:#6172F3;fill-opacity:.90}
+      .cat_contact{fill:#FFF7ED;stroke:#F97316;stroke-width:1.8} .strip_contact{fill:#F97316;fill-opacity:.90}
+      .cat_final{fill:#F2F4F7;stroke:#475467;stroke-width:1.8} .strip_final{fill:#475467;fill-opacity:.90}
+      .cat_render{fill:#F8FAFC;stroke:#667085;stroke-width:1.8} .strip_render{fill:#667085;fill-opacity:.90}
+      .dep{stroke:#667085;stroke-width:1.25;stroke-opacity:.30;fill:none;stroke-dasharray:4 8;marker-end:url(#depArrow);stroke-linecap:round;stroke-linejoin:round}.local{stroke:#475467;stroke-width:1.1;stroke-opacity:.18;fill:none;stroke-linecap:round;stroke-linejoin:round}
+    </style>
+  </defs>
+  <rect x="0" y="0" width="2800" height="1660" fill="#FFFFFF"/>
+  <text x="1400" y="42" text-anchor="middle" class="title">Ego Annotation V18：19步主线 + I1-I4 measurement improvement要求</text>
+  <text x="1400" y="72" text-anchor="middle" class="subtitle">新增要求：更强深度、遮挡分割补全、生成式点云/几何补全、物理一致性/无穿模校验；I节点是计划机制，不表示已完成。</text>
+  <text x="65" y="100" class="tiny">步骤来源：docs/ego_annotation_algorithm_pipeline_flow.md；I1-I4 是叠加在现有 V18 主线上的 improvement requirements，必须进入最终 annotation/render 数据流后才算实现。</text>
+  <rect x="35" y="125" width="2670" height="365" rx="24" class="coreCluster"/>
+  <text x="60" y="155" class="section">核心生成步骤：直接生成最终标注语义 / 物理状态 / annotation backing data</text>
+  <rect x="35" y="540" width="2670" height="585" rx="24" class="supportCluster"/>
+  <text x="60" y="570" class="section">支持输入 + 物理一致性 / 后处理 / 校验：提供证据、补全候选或检查核心结果</text>
+  <rect x="35" y="1185" width="2670" height="230" rx="24" class="renderCluster"/>
+  <text x="60" y="1215" class="section">灰色非核心步骤：渲染、拼接、QC、report、admin</text>
+  <rect x="53" y="165" width="334" height="300" rx="16" class="lane" opacity="0.42"/>
+  <text x="220" y="184" text-anchor="middle" class="laneTitle">LLM/VLM 语义</text>
+  <rect x="53" y="585" width="334" height="505" rx="16" class="lane" opacity="0.45"/>
+  <text x="220" y="604" text-anchor="middle" class="laneTitle">LLM/VLM 语义 support/check</text>
+  <rect x="393" y="165" width="334" height="300" rx="16" class="lane" opacity="0.42"/>
+  <text x="560" y="184" text-anchor="middle" class="laneTitle">分割/部件</text>
+  <rect x="393" y="585" width="334" height="505" rx="16" class="lane" opacity="0.45"/>
+  <text x="560" y="604" text-anchor="middle" class="laneTitle">分割/部件 support/check</text>
+  <rect x="733" y="165" width="334" height="300" rx="16" class="lane" opacity="0.42"/>
+  <text x="900" y="184" text-anchor="middle" class="laneTitle">深度/相机/尺度</text>
+  <rect x="733" y="585" width="334" height="505" rx="16" class="lane" opacity="0.45"/>
+  <text x="900" y="604" text-anchor="middle" class="laneTitle">深度/相机/尺度 support/check</text>
+  <rect x="1073" y="165" width="334" height="300" rx="16" class="lane" opacity="0.42"/>
+  <text x="1240" y="184" text-anchor="middle" class="laneTitle">手部姿态</text>
+  <rect x="1073" y="585" width="334" height="505" rx="16" class="lane" opacity="0.45"/>
+  <text x="1240" y="604" text-anchor="middle" class="laneTitle">手部姿态 support/check</text>
+  <rect x="1413" y="165" width="334" height="300" rx="16" class="lane" opacity="0.42"/>
+  <text x="1580" y="184" text-anchor="middle" class="laneTitle">物体 Mesh/几何</text>
+  <rect x="1413" y="585" width="334" height="505" rx="16" class="lane" opacity="0.45"/>
+  <text x="1580" y="604" text-anchor="middle" class="laneTitle">物体 Mesh/几何 support/check</text>
+  <rect x="1753" y="165" width="334" height="300" rx="16" class="lane" opacity="0.42"/>
+  <text x="1920" y="184" text-anchor="middle" class="laneTitle">物体位姿/姿态</text>
+  <rect x="1753" y="585" width="334" height="505" rx="16" class="lane" opacity="0.45"/>
+  <text x="1920" y="604" text-anchor="middle" class="laneTitle">物体位姿/姿态 support/check</text>
+  <rect x="2093" y="165" width="334" height="300" rx="16" class="lane" opacity="0.42"/>
+  <text x="2260" y="184" text-anchor="middle" class="laneTitle">接触/遮挡/物理一致性</text>
+  <rect x="2093" y="585" width="334" height="505" rx="16" class="lane" opacity="0.45"/>
+  <text x="2260" y="604" text-anchor="middle" class="laneTitle">接触/遮挡/物理一致性 support/check</text>
+  <rect x="2433" y="165" width="334" height="300" rx="16" class="lane" opacity="0.42"/>
+  <text x="2600" y="184" text-anchor="middle" class="laneTitle">最终标注组装</text>
+  <rect x="2433" y="585" width="334" height="505" rx="16" class="lane" opacity="0.45"/>
+  <text x="2600" y="604" text-anchor="middle" class="laneTitle">最终标注组装 support/check</text>
+  <rect x="1073" y="1230" width="334" height="150" rx="16" class="lane" opacity="0.52"/>
+  <text x="1240" y="1249" text-anchor="middle" class="laneTitle">Rendering</text>
+  <rect x="1413" y="1230" width="334" height="150" rx="16" class="lane" opacity="0.52"/>
+  <text x="1580" y="1249" text-anchor="middle" class="laneTitle">Admin/Input contract</text>
+  <rect x="1753" y="1230" width="334" height="150" rx="16" class="lane" opacity="0.52"/>
+  <text x="1920" y="1249" text-anchor="middle" class="laneTitle">QC/Report</text>
+  <path d="M 375.0 219.0 C 388.5 219.0, 391.5 219.0, 405.0 219.0" class="dep"/>
+  <path d="M 715.0 219.0 C 881.5 219.0, 918.5 219.0, 1085.0 219.0" class="dep"/>
+  <path d="M 1055.0 219.0 C 1221.5 219.0, 1258.5 219.0, 1425.0 219.0" class="dep"/>
+  <path d="M 1395.0 219.0 C 1561.5 219.0, 1598.5 219.0, 1765.0 219.0" class="dep"/>
+  <path d="M 2075.0 219.0 C 2088.5 219.0, 2091.5 219.0, 2105.0 219.0" class="dep"/>
+  <path d="M 2415.0 219.0 C 2428.5 219.0, 2431.5 219.0, 2445.0 219.0" class="dep"/>
+  <path d="M 560.0 258.0 C 560.0 434.0, 560.0 434.0, 560.0 610.0" class="dep"/>
+  <path d="M 1580.0 258.0 C 1580.0 275.0, 1580.0 275.0, 1580.0 292.0" class="dep"/>
+  <path d="M 1920.0 258.0 C 1920.0 275.0, 1920.0 275.0, 1920.0 292.0" class="dep"/>
+  <path d="M 2260.0 688.0 C 2260.0 705.0, 2260.0 705.0, 2260.0 722.0" class="dep"/>
+  <path d="M 1240.0 258.0 C 1393.0 258.0, 1427.0 292.0, 1580.0 292.0" class="dep"/>
+  <path d="M 1580.0 370.0 C 1733.0 370.0, 1767.0 610.0, 1920.0 610.0" class="dep"/>
+  <path d="M 1920.0 688.0 C 2073.0 688.0, 2107.0 722.0, 2260.0 722.0" class="dep"/>
+  <path d="M 2260.0 800.0 C 2413.0 800.0, 2447.0 610.0, 2600.0 610.0" class="dep"/>
+  <path d="M 2600.0 688.0 C 2600.0 688.0, 2600.0 292.0, 2600.0 292.0" class="dep"/>
+  <path d="M 2600.0 370.0 C 1988.0 370.0, 1852.0 1245.0, 1240.0 1245.0" class="dep"/>
+  <path d="M 1395.0 1284.0 C 1561.5 1284.0, 1598.5 1284.0, 1765.0 1284.0" class="dep"/>
+  <path d="M 1580.0 1245.0 C 1274.0 1245.0, 1206.0 278.0, 900.0 278.0" class="dep"/>
+  <path d="M 900.0 278.0 C 1206.0 278.0, 1274.0 180.0, 1580.0 180.0" class="dep"/>
+  <path d="M 900.0 278.0 C 1206.0 278.0, 1274.0 292.0, 1580.0 292.0" class="dep"/>
+  <path d="M 900.0 278.0 C 1359.0 278.0, 1461.0 292.0, 1920.0 292.0" class="dep"/>
+  <path d="M 715.0 219.0 C 575.5 219.0, 544.5 830.0, 405.0 830.0" class="dep"/>
+  <path d="M 220.0 258.0 C 303.2 258.0, 321.8 830.0, 405.0 830.0" class="dep"/>
+  <path d="M 560.0 928.0 C 1019.0 928.0, 1121.0 830.0, 1580.0 830.0" class="dep"/>
+  <path d="M 900.0 278.0 C 1206.0 278.0, 1274.0 830.0, 1580.0 830.0" class="dep"/>
+  <path d="M 220.0 258.0 C 832.0 258.0, 968.0 830.0, 1580.0 830.0" class="dep"/>
+  <path d="M 1580.0 928.0 C 1733.0 928.0, 1767.0 610.0, 1920.0 610.0" class="dep"/>
+  <path d="M 1580.0 928.0 C 1733.0 928.0, 1767.0 292.0, 1920.0 292.0" class="dep"/>
+  <path d="M 1580.0 928.0 C 1886.0 928.0, 1954.0 860.0, 2260.0 860.0" class="dep"/>
+  <path d="M 2260.0 800.0 C 2260.0 800.0, 2260.0 860.0, 2260.0 860.0" class="dep"/>
+  <path d="M 2260.0 958.0 C 2107.0 958.0, 2073.0 610.0, 1920.0 610.0" class="dep"/>
+  <path d="M 2260.0 958.0 C 2260.0 958.0, 2260.0 258.0, 2260.0 258.0" class="dep"/>
+  <path d="M 2260.0 958.0 C 2413.0 958.0, 2447.0 292.0, 2600.0 292.0" class="dep"/>
+  <rect x="1425" y="1245" width="310" height="78" rx="13" class="cat_render"/>
+  <rect x="1425" y="1245" width="9" height="78" rx="4" class="strip_render"/>
+  <text x="1443" y="1268" class="num">1</text>
+  <text x="1588" y="1268" text-anchor="middle" class="nodeTitle">Runtime + V16/depth contract</text>
+  <text x="1445" y="1293" class="nodeText">raw/V16/camera-depth inputs</text>
+  <text x="1445" y="1309" class="nodeText">runtime + source contract</text>
+  <rect x="65" y="180" width="310" height="78" rx="13" class="cat_semantic"/>
+  <rect x="65" y="180" width="9" height="78" rx="4" class="strip_semantic"/>
+  <text x="83" y="203" class="num">2</text>
+  <text x="228" y="203" text-anchor="middle" class="nodeTitle">LLM/VLM physical schema</text>
+  <text x="85" y="228" class="nodeText">model notes -&gt; physical state</text>
+  <text x="85" y="244" class="nodeText">part/relative-motion requirement</text>
+  <rect x="1085" y="610" width="310" height="78" rx="13" class="cat_hand"/>
+  <rect x="1085" y="610" width="9" height="78" rx="4" class="strip_hand"/>
+  <text x="1103" y="633" class="num">3</text>
+  <text x="1248" y="633" text-anchor="middle" class="nodeTitle">Hand evidence reducer</text>
+  <text x="1105" y="658" class="nodeText">cached WiLoR/HaWoR/RTMLib</text>
+  <text x="1105" y="674" class="nodeText">baseline evidence, not HaWoR run</text>
+  <rect x="2105" y="610" width="310" height="78" rx="13" class="cat_contact"/>
+  <rect x="2105" y="610" width="9" height="78" rx="4" class="strip_contact"/>
+  <text x="2123" y="633" class="num">4</text>
+  <text x="2268" y="633" text-anchor="middle" class="nodeTitle">Visibility + bounded reducers</text>
+  <text x="2125" y="658" class="nodeText">visibility/occlusion/motion</text>
+  <text x="2125" y="674" class="nodeText">bounded state + consistency graph</text>
+  <rect x="2445" y="180" width="310" height="78" rx="13" class="cat_final"/>
+  <rect x="2445" y="180" width="9" height="78" rx="4" class="strip_final"/>
+  <text x="2463" y="203" class="num">5</text>
+  <text x="2608" y="203" text-anchor="middle" class="nodeTitle">Annotation state base</text>
+  <text x="2465" y="228" class="nodeText">timeline + reducers -&gt; frames</text>
+  <text x="2465" y="244" class="nodeText">base hand/object/contact rows</text>
+  <rect x="1425" y="180" width="310" height="78" rx="13" class="cat_mesh"/>
+  <rect x="1425" y="180" width="9" height="78" rx="4" class="strip_mesh"/>
+  <text x="1443" y="203" class="num">6</text>
+  <text x="1588" y="203" text-anchor="middle" class="nodeTitle">Visible geometry + completion</text>
+  <text x="1445" y="228" class="nodeText">visible object surfaces</text>
+  <text x="1445" y="244" class="nodeText">completion eligibility/blockers</text>
+  <rect x="405" y="180" width="310" height="78" rx="13" class="cat_seg"/>
+  <rect x="405" y="180" width="9" height="78" rx="4" class="strip_seg"/>
+  <text x="423" y="203" class="num">7</text>
+  <text x="568" y="203" text-anchor="middle" class="nodeTitle">OWLv2/SAM2 segmentation</text>
+  <text x="425" y="228" class="nodeText">VLM terms -&gt; OWLv2 boxes</text>
+  <text x="425" y="244" class="nodeText">SAM2 temporal part masks</text>
+  <rect x="405" y="610" width="310" height="78" rx="13" class="cat_seg"/>
+  <rect x="405" y="610" width="9" height="78" rx="4" class="strip_seg"/>
+  <text x="423" y="633" class="num">8</text>
+  <text x="568" y="633" text-anchor="middle" class="nodeTitle">Part mask support gates</text>
+  <text x="425" y="658" class="nodeText">source manifest + SAM probes</text>
+  <text x="425" y="674" class="nodeText">acquisition/promotion gates</text>
+  <rect x="1765" y="180" width="310" height="78" rx="13" class="cat_pose"/>
+  <rect x="1765" y="180" width="9" height="78" rx="4" class="strip_pose"/>
+  <text x="1783" y="203" class="num">9</text>
+  <text x="1928" y="203" text-anchor="middle" class="nodeTitle">Part surfaces + pose evidence</text>
+  <text x="1785" y="228" class="nodeText">part surfaces + motion</text>
+  <text x="1785" y="244" class="nodeText">articulation + SE(3) residuals</text>
+  <rect x="2105" y="722" width="310" height="78" rx="13" class="cat_contact"/>
+  <rect x="2105" y="722" width="9" height="78" rx="4" class="strip_contact"/>
+  <text x="2123" y="745" class="num">10</text>
+  <text x="2268" y="745" text-anchor="middle" class="nodeTitle">Contact/occlusion/NP evidence</text>
+  <text x="2125" y="770" class="nodeText">mesh contact + ownership</text>
+  <text x="2125" y="786" class="nodeText">nonpenetration + occlusion roots</text>
+  <rect x="2445" y="610" width="310" height="78" rx="13" class="cat_final"/>
+  <rect x="2445" y="610" width="9" height="78" rx="4" class="strip_final"/>
+  <text x="2463" y="633" class="num">11</text>
+  <text x="2608" y="633" text-anchor="middle" class="nodeTitle">Final evidence load</text>
+  <text x="2465" y="658" class="nodeText">load all roots in full pipeline</text>
+  <text x="2465" y="674" class="nodeText">includes HaWoR metric bridge</text>
+  <rect x="1085" y="180" width="310" height="78" rx="13" class="cat_hand"/>
+  <rect x="1085" y="180" width="9" height="78" rx="4" class="strip_hand"/>
+  <text x="1103" y="203" class="num">12</text>
+  <text x="1248" y="203" text-anchor="middle" class="nodeTitle">Hand state assembly</text>
+  <text x="1105" y="228" class="nodeText">final per-frame hand state</text>
+  <text x="1105" y="244" class="nodeText">metric MANO + uncertainty</text>
+  <rect x="1425" y="292" width="310" height="78" rx="13" class="cat_mesh"/>
+  <rect x="1425" y="292" width="9" height="78" rx="4" class="strip_mesh"/>
+  <text x="1443" y="315" class="num">13</text>
+  <text x="1588" y="315" text-anchor="middle" class="nodeTitle">Object/part/contact assembly</text>
+  <text x="1445" y="340" class="nodeText">object + part + contact loops</text>
+  <text x="1445" y="356" class="nodeText">geometry/schema/contact fields</text>
+  <rect x="1765" y="292" width="310" height="78" rx="13" class="cat_pose"/>
+  <rect x="1765" y="292" width="9" height="78" rx="4" class="strip_pose"/>
+  <text x="1783" y="315" class="num">14</text>
+  <text x="1928" y="315" text-anchor="middle" class="nodeTitle">Factor graph solve</text>
+  <text x="1785" y="340" class="nodeText">sparse LS + Viterbi</text>
+  <text x="1785" y="356" class="nodeText">occlusion min-energy</text>
+  <rect x="1765" y="610" width="310" height="78" rx="13" class="cat_pose"/>
+  <rect x="1765" y="610" width="9" height="78" rx="4" class="strip_pose"/>
+  <text x="1783" y="633" class="num">15</text>
+  <text x="1928" y="633" text-anchor="middle" class="nodeTitle">Post-graph pose validation</text>
+  <text x="1785" y="658" class="nodeText">geometry pose + part pose</text>
+  <text x="1785" y="674" class="nodeText">object silhouette/depth validation</text>
+  <rect x="2105" y="180" width="310" height="78" rx="13" class="cat_contact"/>
+  <rect x="2105" y="180" width="9" height="78" rx="4" class="strip_contact"/>
+  <text x="2123" y="203" class="num">16</text>
+  <text x="2268" y="203" text-anchor="middle" class="nodeTitle">Contact physical modes</text>
+  <text x="2125" y="228" class="nodeText">active/near/episode/depth-blocked</text>
+  <text x="2125" y="244" class="nodeText">depth-order contact occlusion</text>
+  <rect x="2445" y="292" width="310" height="78" rx="13" class="cat_final"/>
+  <rect x="2445" y="292" width="9" height="78" rx="4" class="strip_final"/>
+  <text x="2463" y="315" class="num">17</text>
+  <text x="2608" y="315" text-anchor="middle" class="nodeTitle">Write final annotations</text>
+  <text x="2465" y="340" class="nodeText">annotations_v18_full.json</text>
+  <text x="2465" y="356" class="nodeText">renderable backing data</text>
+  <rect x="1085" y="1245" width="310" height="78" rx="13" class="cat_render"/>
+  <rect x="1085" y="1245" width="9" height="78" rx="4" class="strip_render"/>
+  <text x="1103" y="1268" class="num">18</text>
+  <text x="1248" y="1268" text-anchor="middle" class="nodeTitle">Render videos</text>
+  <text x="1105" y="1293" class="nodeText">overlay + world + side-by-side</text>
+  <text x="1105" y="1309" class="nodeText">gray non-core output</text>
+  <rect x="1765" y="1245" width="310" height="78" rx="13" class="cat_render"/>
+  <rect x="1765" y="1245" width="9" height="78" rx="4" class="strip_render"/>
+  <text x="1783" y="1268" class="num">19</text>
+  <text x="1928" y="1268" text-anchor="middle" class="nodeTitle">QC/report/self-inspection</text>
+  <text x="1785" y="1293" class="nodeText">ffprobe + reports + counts</text>
+  <text x="1785" y="1309" class="nodeText">gray non-core verification</text>
+  <rect x="745" y="180" width="310" height="78" rx="13" class="cat_depth" style="stroke-dasharray:7 5;stroke-width:2.4"/>
+  <rect x="745" y="180" width="9" height="78" rx="4" class="strip_depth"/>
+  <text x="763" y="203" class="num">I1</text>
+  <text x="908" y="203" text-anchor="middle" class="nodeTitle">更强深度估计</text>
+  <text x="765" y="228" class="nodeText">Depth Pro / VGGT / UniDepth级候选</text>
+  <text x="765" y="244" class="nodeText">metric scale + confidence/covariance</text>
+  <rect x="405" y="830" width="310" height="98" rx="13" class="cat_seg" style="stroke-dasharray:7 5;stroke-width:2.4"/>
+  <rect x="405" y="830" width="9" height="98" rx="4" class="strip_seg"/>
+  <text x="423" y="853" class="num">I2</text>
+  <text x="568" y="853" text-anchor="middle" class="nodeTitle">遮挡分割补全</text>
+  <text x="425" y="878" class="nodeText">补齐被手/物遮挡的mask区域</text>
+  <text x="425" y="894" class="nodeText">保留observed/completed来源标记</text>
+  <rect x="1425" y="830" width="310" height="98" rx="13" class="cat_mesh" style="stroke-dasharray:7 5;stroke-width:2.4"/>
+  <rect x="1425" y="830" width="9" height="98" rx="4" class="strip_mesh"/>
+  <text x="1443" y="853" class="num">I3</text>
+  <text x="1588" y="853" text-anchor="middle" class="nodeTitle">生成式点云/几何补全</text>
+  <text x="1445" y="878" class="nodeText">输入: I2补全mask + I1深度 + LLM schema</text>
+  <text x="1445" y="894" class="nodeText">输出hidden-surface/point-cloud候选 + uncertainty</text>
+  <rect x="2105" y="860" width="310" height="98" rx="13" class="cat_contact" style="stroke-dasharray:7 5;stroke-width:2.4"/>
+  <rect x="2105" y="860" width="9" height="98" rx="4" class="strip_contact"/>
+  <text x="2123" y="883" class="num">I4</text>
+  <text x="2268" y="883" text-anchor="middle" class="nodeTitle">生成结果物理一致性校验</text>
+  <text x="2125" y="908" class="nodeText">nonpenetration / no穿模 / depth-order</text>
+  <text x="2125" y="924" class="nodeText">失败则降级candidate或rejected</text>
+  <rect x="55" y="1448" width="2630" height="160" rx="12" fill="#FFFFFF" stroke="#D0D5DD"/>
+  <text x="73" y="1470" class="tiny">编号=当前19步主线执行顺序；I1-I4=新增improvement要求，不是已完成状态。虚线节点表示必须新增/替换的机制入口。</text>
+  <text x="73" y="1490" class="tiny">I3 的生成式补全必须消费 I1 深度、I2 补全mask与 LLM schema；I4 必须复用/扩展现有 contact、occlusion、nonpenetration、depth-order 校验，失败输出 candidate/rejected。</text>
+  <rect x="73" y="1510" width="20" height="13" rx="3" fill="#FEF7C3" stroke="#EAAA08"/>
+  <text x="101" y="1520" class="tiny">LLM/VLM 语义</text>
+  <rect x="353" y="1510" width="20" height="13" rx="3" fill="#E0F2FE" stroke="#0284C7"/>
+  <text x="381" y="1520" class="tiny">分割/部件</text>
+  <rect x="633" y="1510" width="20" height="13" rx="3" fill="#E6FFFB" stroke="#0E9384"/>
+  <text x="661" y="1520" class="tiny">深度/相机/尺度</text>
+  <rect x="913" y="1510" width="20" height="13" rx="3" fill="#F4EBFF" stroke="#7F56D9"/>
+  <text x="941" y="1520" class="tiny">手部姿态</text>
+  <rect x="1193" y="1510" width="20" height="13" rx="3" fill="#ECFDF3" stroke="#12B76A"/>
+  <text x="1221" y="1520" class="tiny">物体 Mesh/几何</text>
+  <rect x="1473" y="1510" width="20" height="13" rx="3" fill="#EEF4FF" stroke="#6172F3"/>
+  <text x="1501" y="1520" class="tiny">物体位姿/姿态</text>
+  <rect x="1753" y="1510" width="20" height="13" rx="3" fill="#FFF7ED" stroke="#F97316"/>
+  <text x="1781" y="1520" class="tiny">接触/遮挡/物理一致性</text>
+  <rect x="2033" y="1510" width="20" height="13" rx="3" fill="#F2F4F7" stroke="#475467"/>
+  <text x="2061" y="1520" class="tiny">最终标注组装</text>
+  <rect x="2313" y="1510" width="20" height="13" rx="3" fill="#F8FAFC" stroke="#667085"/>
+  <text x="2341" y="1520" class="tiny">非核心渲染/QC</text>
+</svg>

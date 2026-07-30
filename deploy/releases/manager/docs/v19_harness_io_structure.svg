@@ -1,0 +1,225 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1420" viewBox="0 0 1900 1420">
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 34px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 18px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #475569; }
+      .laneTitle { font: 700 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #0f172a; }
+      .sectionTitle { font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #0f172a; }
+      .nodeTitle { font: 700 16px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #111827; }
+      .nodeText { font: 500 13px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #334155; }
+      .small { font: 500 12px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #475569; }
+      .note { font: 600 13px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #6b21a8; }
+      .inputBox { fill: #e0f2fe; stroke: #0284c7; stroke-width: 2; rx: 14; }
+      .harnessBox { fill: #ede9fe; stroke: #7c3aed; stroke-width: 2; rx: 14; }
+      .runtimeBox { fill: #f3e8ff; stroke: #9333ea; stroke-width: 3; rx: 14; }
+      .outputBox { fill: #dcfce7; stroke: #16a34a; stroke-width: 2; rx: 14; }
+      .feedbackBox { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; rx: 14; }
+      .missingBox { fill: #fee2e2; stroke: #dc2626; stroke-width: 2; rx: 14; }
+      .lane { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 22; }
+      .arrow { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .arrowSoft { stroke: #94a3b8; stroke-width: 1.8; fill: none; marker-end: url(#arrowSoft); stroke-dasharray: 7 6; }
+      .arrowPurple { stroke: #7c3aed; stroke-width: 2.4; fill: none; marker-end: url(#arrowPurple); }
+      .arrowGreen { stroke: #16a34a; stroke-width: 2.4; fill: none; marker-end: url(#arrowGreen); }
+      .arrowOrange { stroke: #ea580c; stroke-width: 2.2; fill: none; marker-end: url(#arrowOrange); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker>
+    <marker id="arrowSoft" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker>
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/></marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/></marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ea580c"/></marker>
+  </defs>
+
+  <rect class="bg" width="1900" height="1420"/>
+  <text x="70" y="58" class="title">V19 Pi-Agent Harness：输入 / 证据 → Runtime 读取规则与手册 → 决定/影响的产物</text>
+  <text x="70" y="88" class="subtitle">静态 harness 文件提供规则、索引和 runbook；Pi Runtime 才消费视频/测量/渲染证据并产生决策。</text>
+
+  <rect x="45" y="125" width="530" height="1205" class="lane"/>
+  <rect x="685" y="125" width="530" height="1205" class="lane"/>
+  <rect x="1325" y="125" width="530" height="1205" class="lane"/>
+  <text x="310" y="165" text-anchor="middle" class="laneTitle">输入 / 循环证据</text>
+  <text x="950" y="165" text-anchor="middle" class="laneTitle">Harness 文件 / Pi Runtime</text>
+  <text x="1590" y="165" text-anchor="middle" class="laneTitle">决定 / 影响的产物</text>
+
+  <!-- Left lane -->
+  <rect x="85" y="205" width="450" height="160" class="inputBox"/>
+  <text x="105" y="232" class="sectionTitle">A. 原始任务输入</text>
+  <text x="120" y="260" class="nodeText">• input video</text>
+  <text x="120" y="282" class="nodeText">• run root / case id</text>
+  <text x="120" y="304" class="nodeText">• optional calibration / depth / object hints</text>
+  <text x="120" y="326" class="nodeText">• compute target、model paths、checkpoints、budget</text>
+  <text x="120" y="348" class="nodeText">• 已有 V16/V17/V18 manifest / annotations（可选开发输入）</text>
+
+  <rect x="85" y="405" width="450" height="145" class="inputBox"/>
+  <text x="105" y="432" class="sectionTitle">B. 仓库组件/旧版本代码事实</text>
+  <text x="120" y="460" class="nodeText">• V16/V17/V18 scripts</text>
+  <text x="120" y="482" class="nodeText">• run_v18 god-file 不能直接当 fresh-video harness</text>
+  <text x="120" y="504" class="nodeText">• 可复用 measurement / optimization / render scripts</text>
+  <text x="120" y="526" class="nodeText">• 已暴露的组件缺口</text>
+
+  <rect x="85" y="590" width="450" height="170" class="inputBox"/>
+  <text x="105" y="617" class="sectionTitle">C. Agent 直接视觉理解</text>
+  <text x="120" y="645" class="nodeText">• sampled frames / crops</text>
+  <text x="120" y="667" class="nodeText">• visible object evidence</text>
+  <text x="120" y="689" class="nodeText">• support / occluder / contact cues</text>
+  <text x="120" y="711" class="nodeText">• rigid / deformable / unresolved hypotheses</text>
+  <text x="120" y="733" class="nodeText">• branch uncertainty</text>
+
+  <rect x="85" y="800" width="450" height="215" class="inputBox"/>
+  <text x="105" y="827" class="sectionTitle">D. 视觉/几何算法测量结果</text>
+  <text x="120" y="855" class="nodeText">• DROID camera pose</text>
+  <text x="120" y="877" class="nodeText">• UniDepth metric depth</text>
+  <text x="120" y="899" class="nodeText">• RTMLib / WiLoR / HaWoR / HaMeR hand candidates</text>
+  <text x="120" y="921" class="nodeText">• SAM2 masks / tracks</text>
+  <text x="120" y="943" class="nodeText">• visible / depth-fused surfaces、mesh candidates、pose reports</text>
+  <text x="120" y="965" class="nodeText">• contact / occlusion / nonpenetration evidence</text>
+  <text x="120" y="987" class="nodeText">• QC / residuals</text>
+
+  <rect x="85" y="1055" width="450" height="130" class="feedbackBox"/>
+  <text x="105" y="1082" class="sectionTitle">E. 渲染反馈</text>
+  <text x="120" y="1110" class="nodeText">• overlay / world / side-by-side videos</text>
+  <text x="120" y="1132" class="nodeText">• depth overlays / review sheets</text>
+  <text x="120" y="1154" class="nodeText">• agent review of mechanism failures</text>
+
+  <!-- Middle lane -->
+  <rect x="725" y="205" width="450" height="135" class="harnessBox"/>
+  <text x="745" y="232" class="nodeTitle">docs/v19_run_contract.md</text>
+  <text x="760" y="260" class="nodeText">• Pi 是 harness；scripts 是工具</text>
+  <text x="760" y="282" class="nodeText">• run directory / state boundary</text>
+  <text x="760" y="304" class="nodeText">• compute target / evidence-cycle budget</text>
+  <text x="760" y="326" class="nodeText">• 缺失组件 stop rule</text>
+
+  <rect x="725" y="370" width="450" height="120" class="harnessBox"/>
+  <text x="745" y="397" class="nodeTitle">.pi/prompts/v19-run.md</text>
+  <text x="760" y="425" class="nodeText">• slash-command 接收 input video / run root / case id</text>
+  <text x="760" y="447" class="nodeText">• runtime first actions</text>
+  <text x="760" y="469" class="nodeText">• 要求读取 component extraction + orchestration</text>
+
+  <rect x="725" y="520" width="450" height="140" class="harnessBox"/>
+  <text x="745" y="547" class="nodeTitle">configs/v19_agent_system_prompt.md</text>
+  <text x="760" y="575" class="nodeText">• runtime 行为规则</text>
+  <text x="760" y="597" class="nodeText">• no-proxy / no-fake / missing-stop</text>
+  <text x="760" y="619" class="nodeText">• 弱测量进入 uncertainty</text>
+  <text x="760" y="641" class="nodeText">• 被 Runtime 读取；约束行为，不直接写产物</text>
+
+  <rect x="725" y="690" width="450" height="150" class="harnessBox"/>
+  <text x="745" y="717" class="nodeTitle">docs/v19_component_extraction.md</text>
+  <text x="760" y="745" class="nodeText">• 被 Runtime 读取的 V18/V17 组件索引</text>
+  <text x="760" y="767" class="nodeText">• 标出不可直接复用的大脚本</text>
+  <text x="760" y="789" class="nodeText">• measurement / tracking / geometry / render 零件库</text>
+  <text x="760" y="811" class="nodeText">• 暴露 immediate gaps</text>
+
+  <rect x="725" y="870" width="450" height="165" class="harnessBox"/>
+  <text x="745" y="897" class="nodeTitle">docs/v19_english_orchestration.md</text>
+  <text x="760" y="925" class="nodeText">• 被 Runtime 执行的 runbook / command truth</text>
+  <text x="760" y="947" class="nodeText">• 每个物理变量映射到真实脚本</text>
+  <text x="760" y="969" class="nodeText">• 显式列出 missing implementation</text>
+  <text x="760" y="991" class="nodeText">• measurement → optimization → render 顺序</text>
+  <text x="760" y="1013" class="nodeText">• visual consumption and repair loop</text>
+
+  <rect x="725" y="1065" width="450" height="150" class="runtimeBox"/>
+  <text x="745" y="1092" class="nodeTitle">Pi Agent Runtime</text>
+  <text x="760" y="1120" class="nodeText">• 看 frames、measurements、renders</text>
+  <text x="760" y="1142" class="nodeText">• 写 object plan / point prompts（VLM scripts 仅作 schema）</text>
+  <text x="760" y="1164" class="nodeText">• 选 branch、调用脚本、调参数</text>
+  <text x="760" y="1186" class="nodeText">• 写 state、扩大 uncertainty、触发重渲染</text>
+
+  <rect x="725" y="1245" width="450" height="55" class="missingBox"/>
+  <text x="745" y="1268" class="note">明确缺口：独立 manifest 命令、fresh base annotation builder、</text>
+  <text x="745" y="1288" class="note">V19 state-to-render adapter、HOT3D/H2O/DexYCB adapters</text>
+
+  <!-- Right lane -->
+  <rect x="1365" y="205" width="450" height="135" class="outputBox"/>
+  <text x="1385" y="232" class="sectionTitle">1. 启动/运行控制产物</text>
+  <text x="1400" y="260" class="nodeText">• run root layout</text>
+  <text x="1400" y="282" class="nodeText">• input/input_manifest.json</text>
+  <text x="1400" y="304" class="nodeText">• logs/harness_events.jsonl</text>
+  <text x="1400" y="326" class="nodeText">• max_evidence_cycles / unresolved initial state</text>
+
+  <rect x="1365" y="375" width="450" height="130" class="outputBox"/>
+  <text x="1385" y="402" class="sectionTitle">2. 组件选择依据</text>
+  <text x="1400" y="430" class="nodeText">• reusable component map</text>
+  <text x="1400" y="452" class="nodeText">• scripts that are tools, not harness entry</text>
+  <text x="1400" y="474" class="nodeText">• immediate gaps / missing stops</text>
+  <text x="1400" y="496" class="nodeText">• feeds orchestration and Runtime decisions</text>
+
+  <rect x="1365" y="540" width="450" height="145" class="outputBox"/>
+  <text x="1385" y="567" class="sectionTitle">3. Agent 语义/分支控制产物</text>
+  <text x="1400" y="595" class="nodeText">• object_plan_agent.json</text>
+  <text x="1400" y="617" class="nodeText">• object_point_prompts_vlm.json per track</text>
+  <text x="1400" y="639" class="nodeText">• rigid / deformable / unresolved branch choice</text>
+  <text x="1400" y="661" class="nodeText">• next measurement / repair decision</text>
+
+  <rect x="1365" y="720" width="450" height="155" class="outputBox"/>
+  <text x="1385" y="747" class="sectionTitle">4. 测量产物</text>
+  <text x="1400" y="775" class="nodeText">• depth / camera / hand / mask / visible surface</text>
+  <text x="1400" y="797" class="nodeText">• depth-fused / observed mesh reconstruction</text>
+  <text x="1400" y="819" class="nodeText">• mesh completion / rigid pose / hidden-volume validation</text>
+  <text x="1400" y="841" class="nodeText">• contact / occlusion / nonpenetration evidence</text>
+
+  <rect x="1365" y="910" width="450" height="150" class="outputBox"/>
+  <text x="1385" y="937" class="sectionTitle">5. 优化 / 配置决策</text>
+  <text x="1400" y="965" class="nodeText">• enabled factor families</text>
+  <text x="1400" y="987" class="nodeText">• weights、sigmas、thresholds、tolerances</text>
+  <text x="1400" y="1009" class="nodeText">• corrected pose / MANO / contact state reports</text>
+  <text x="1400" y="1031" class="nodeText">• uncertainty expansion or acceptance</text>
+
+  <rect x="1365" y="1095" width="450" height="135" class="outputBox"/>
+  <text x="1385" y="1122" class="sectionTitle">6. Renderer 消费的物理状态</text>
+  <text x="1400" y="1150" class="nodeText">• state/v19_physical_state.json</text>
+  <text x="1400" y="1172" class="nodeText">• state/v19_uncertainty_state.json</text>
+  <text x="1400" y="1194" class="nodeText">• state/v19_agent_evidence.md</text>
+  <text x="1400" y="1216" class="nodeText">• V18-compatible annotation JSON for now</text>
+
+  <rect x="1365" y="1260" width="450" height="110" class="outputBox"/>
+  <text x="1385" y="1287" class="sectionTitle">7. 最终可视化产物</text>
+  <text x="1400" y="1315" class="nodeText">• renders/v19_overlay.mp4</text>
+  <text x="1400" y="1337" class="nodeText">• renders/v19_world.mp4</text>
+  <text x="1400" y="1359" class="nodeText">• renders/v19_side_by_side.mp4</text>
+
+  <!-- Input to middle arrows -->
+  <path class="arrow" d="M 535 285 C 610 270, 650 270, 725 270"/>
+  <path class="arrow" d="M 535 285 C 625 315, 645 425, 725 430"/>
+  <path class="arrow" d="M 535 478 C 625 505, 650 745, 725 765"/>
+  <path class="arrow" d="M 535 675 C 625 680, 650 930, 725 952"/>
+  <path class="arrowPurple" d="M 535 675 C 640 700, 650 1090, 725 1140"/>
+  <path class="arrowPurple" d="M 535 908 C 640 900, 650 1110, 725 1140"/>
+  <path class="arrowOrange" d="M 535 1120 C 635 1110, 650 1140, 725 1140"/>
+
+  <!-- Middle internal arrows -->
+  <path class="arrowPurple" d="M 950 340 L 950 370"/>
+  <path class="arrowPurple" d="M 950 490 L 950 520"/>
+  <path class="arrowSoft" d="M 1175 590 C 1235 650, 1235 1080, 1175 1140"/>
+  <path class="arrowPurple" d="M 950 660 L 950 690"/>
+  <path class="arrowPurple" d="M 950 840 L 950 870"/>
+  <path class="arrowPurple" d="M 950 1035 L 950 1065"/>
+
+  <!-- Middle to right arrows -->
+  <path class="arrowGreen" d="M 1175 270 C 1245 270, 1295 270, 1365 270"/>
+  <path class="arrowGreen" d="M 1175 765 C 1250 650, 1295 440, 1365 440"/>
+  <path class="arrowGreen" d="M 1175 952 C 1260 900, 1295 790, 1365 797"/>
+  <path class="arrowGreen" d="M 1175 1140 C 1260 1025, 1295 610, 1365 612"/>
+  <path class="arrowGreen" d="M 1175 1140 C 1260 1100, 1295 985, 1365 985"/>
+  <path class="arrowGreen" d="M 1175 1140 C 1260 1140, 1295 1162, 1365 1162"/>
+  <path class="arrowGreen" d="M 1175 1140 C 1255 1200, 1295 1315, 1365 1315"/>
+
+  <!-- Feedback loop -->
+  <path class="arrowOrange" d="M 1365 1315 C 1115 1410, 675 1345, 535 1120"/>
+  <path class="arrowSoft" d="M 1365 1162 C 1270 1165, 1220 1145, 1175 1140"/>
+
+  <!-- Labels -->
+  <text x="585" y="258" class="small">原始输入契约</text>
+  <text x="570" y="462" class="small">组件事实</text>
+  <text x="555" y="650" class="small">视觉理解</text>
+  <text x="545" y="870" class="small">测量结果输入 Runtime</text>
+  <text x="545" y="1100" class="small">渲染反馈</text>
+  <text x="1198" y="578" class="small">Runtime 读取规则</text>
+  <text x="1230" y="255" class="small">定义 run 产物</text>
+  <text x="1230" y="430" class="small">提供组件索引</text>
+  <text x="1230" y="780" class="small">调用测量/几何工具</text>
+  <text x="1230" y="970" class="small">设置 factor/参数</text>
+  <text x="1230" y="1152" class="small">写入 state</text>
+  <text x="1230" y="1310" class="small">渲染视频</text>
+
+  <text x="70" y="1390" class="subtitle">关键点：system_prompt/component_extraction/orchestration 是 Runtime 读取的规则/索引/手册；Pi Runtime 同时消费视频、测量结果和渲染反馈。</text>
+</svg>

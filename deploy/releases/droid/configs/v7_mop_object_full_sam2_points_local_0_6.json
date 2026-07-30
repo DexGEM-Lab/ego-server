@@ -1,0 +1,115 @@
+{
+  "track_id": "full_visible_mop_with_lower_handle",
+  "description": "the complete visible floor mop: blue mop head, red connector, metal shaft, lower pale handle section, and any visible handle surface at the gloved grasp",
+  "object_plan": "Segment the physical mop as one object. Include the mop head, connector, full visible shaft, and visible lower handle/grip near the hand. Exclude the gloved hand, shoes, legs, table, sofa, floor, and shadows.",
+  "prompt_image_width": 1920,
+  "source_frame_start": 759,
+  "source_frame_end": 765,
+  "local_frame_mapping": {
+    "0": 759,
+    "1": 760,
+    "2": 761,
+    "3": 762,
+    "4": 763,
+    "5": 764,
+    "6": 765
+  },
+  "point_prompts": [
+    {
+      "frame_idx": 0,
+      "source_frame_idx": 759,
+      "target_visible": true,
+      "confidence": 1.0,
+      "visual_evidence": "The mop head, shaft, pale lower handle, and handle surface at the grasp are visible.",
+      "bbox_xyxy": [720, 185, 1195, 1010],
+      "positive_points": [
+        {"x": 1030, "y": 224},
+        {"x": 1115, "y": 242},
+        {"x": 1046, "y": 342},
+        {"x": 963, "y": 482},
+        {"x": 869, "y": 641},
+        {"x": 807, "y": 728},
+        {"x": 799, "y": 822},
+        {"x": 763, "y": 942}
+      ],
+      "negative_points": [
+        {"x": 895, "y": 445},
+        {"x": 925, "y": 520},
+        {"x": 875, "y": 585},
+        {"x": 832, "y": 670},
+        {"x": 844, "y": 881},
+        {"x": 904, "y": 966},
+        {"x": 1065, "y": 784},
+        {"x": 1195, "y": 1042},
+        {"x": 1432, "y": 600},
+        {"x": 402, "y": 112},
+        {"x": 618, "y": 825},
+        {"x": 1245, "y": 210}
+      ]
+    },
+    {
+      "frame_idx": 3,
+      "source_frame_idx": 762,
+      "target_visible": true,
+      "confidence": 1.0,
+      "visual_evidence": "The mop head, shaft, pale lower handle, and handle surface at the grasp are visible.",
+      "bbox_xyxy": [720, 185, 1195, 1000],
+      "positive_points": [
+        {"x": 1030, "y": 223},
+        {"x": 1120, "y": 240},
+        {"x": 1046, "y": 340},
+        {"x": 963, "y": 482},
+        {"x": 872, "y": 642},
+        {"x": 807, "y": 728},
+        {"x": 799, "y": 816},
+        {"x": 764, "y": 934}
+      ],
+      "negative_points": [
+        {"x": 895, "y": 445},
+        {"x": 925, "y": 520},
+        {"x": 875, "y": 585},
+        {"x": 832, "y": 670},
+        {"x": 842, "y": 872},
+        {"x": 904, "y": 958},
+        {"x": 1065, "y": 776},
+        {"x": 1195, "y": 1030},
+        {"x": 1432, "y": 600},
+        {"x": 402, "y": 112},
+        {"x": 618, "y": 818},
+        {"x": 1245, "y": 210}
+      ]
+    },
+    {
+      "frame_idx": 6,
+      "source_frame_idx": 765,
+      "target_visible": true,
+      "confidence": 1.0,
+      "visual_evidence": "The mop head, shaft, pale lower handle, and handle surface at the grasp are visible.",
+      "bbox_xyxy": [720, 185, 1195, 990],
+      "positive_points": [
+        {"x": 1030, "y": 221},
+        {"x": 1120, "y": 238},
+        {"x": 1046, "y": 338},
+        {"x": 964, "y": 478},
+        {"x": 872, "y": 636},
+        {"x": 807, "y": 721},
+        {"x": 799, "y": 806},
+        {"x": 765, "y": 926}
+      ],
+      "negative_points": [
+        {"x": 895, "y": 445},
+        {"x": 925, "y": 520},
+        {"x": 875, "y": 585},
+        {"x": 832, "y": 670},
+        {"x": 842, "y": 862},
+        {"x": 904, "y": 948},
+        {"x": 1065, "y": 766},
+        {"x": 1195, "y": 1018},
+        {"x": 1432, "y": 600},
+        {"x": 402, "y": 112},
+        {"x": 618, "y": 808},
+        {"x": 1245, "y": 210}
+      ]
+    }
+  ]
+}

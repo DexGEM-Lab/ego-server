@@ -1,0 +1,505 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2965" height="1900" viewBox="0 0 2965 1900">
+  <defs>
+    <marker id="depArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#667085" fill-opacity="0.30"/></marker>
+    <style>
+      .title{font:700 34px sans-serif;fill:#101828}.subtitle{font:16px sans-serif;fill:#475467}.section{font:700 20px sans-serif;fill:#344054}.laneTitle{font:700 13px sans-serif;fill:#344054}.tiny{font:11px sans-serif;fill:#667085}
+      .num{font:700 15px sans-serif;fill:#101828}.nodeTitle{font:700 13px sans-serif;fill:#101828}.nodeText{font:11.3px sans-serif;fill:#344054}.badge{font:700 10px sans-serif;fill:#FFFFFF}
+      .coreCluster{fill:#F6FEF9;stroke:#12B76A;stroke-width:2;stroke-dasharray:9 7}.supportCluster{fill:#FFF7ED;stroke:#F97316;stroke-width:2;stroke-dasharray:9 7}.renderCluster{fill:#F8FAFC;stroke:#98A2B3;stroke-width:2;stroke-dasharray:9 7}.lane{fill:#FFFFFF;stroke:#EAECF0;stroke-width:1}
+      .cat_semantic{fill:#FEF7C3;stroke:#EAAA08;stroke-width:1.7} .strip_semantic{fill:#EAAA08;fill-opacity:.90}
+      .cat_seg{fill:#E0F2FE;stroke:#0284C7;stroke-width:1.7} .strip_seg{fill:#0284C7;fill-opacity:.90}
+      .cat_depth{fill:#E6FFFB;stroke:#0E9384;stroke-width:1.7} .strip_depth{fill:#0E9384;fill-opacity:.90}
+      .cat_hand{fill:#F4EBFF;stroke:#7F56D9;stroke-width:1.7} .strip_hand{fill:#7F56D9;fill-opacity:.90}
+      .cat_mesh{fill:#ECFDF3;stroke:#12B76A;stroke-width:1.7} .strip_mesh{fill:#12B76A;fill-opacity:.90}
+      .cat_pose{fill:#EEF4FF;stroke:#6172F3;stroke-width:1.7} .strip_pose{fill:#6172F3;fill-opacity:.90}
+      .cat_contact{fill:#FFF7ED;stroke:#F97316;stroke-width:1.7} .strip_contact{fill:#F97316;fill-opacity:.90}
+      .cat_final{fill:#F2F4F7;stroke:#475467;stroke-width:1.7} .strip_final{fill:#475467;fill-opacity:.90}
+      .cat_render{fill:#F8FAFC;stroke:#667085;stroke-width:1.7} .strip_render{fill:#667085;fill-opacity:.90}
+      .dep{stroke:#667085;stroke-width:1.1;stroke-opacity:.24;fill:none;stroke-dasharray:4 8;marker-end:url(#depArrow);stroke-linecap:round;stroke-linejoin:round}.local{stroke:#475467;stroke-width:1.0;stroke-opacity:.16;fill:none;stroke-linecap:round;stroke-linejoin:round}
+    </style>
+  </defs>
+  <rect x="0" y="0" width="2965" height="1900" fill="#FFFFFF"/>
+  <text x="1482.5" y="42" text-anchor="middle" class="title">Ego Annotation：有效迭代层粗粒度流程图</text>
+  <text x="1482.5" y="72" text-anchor="middle" class="subtitle">V16、V17、V18 measured/status、V18 corrective/extension、V18 final 五个有效层；V16 camera/depth/render 与 hand 子步骤已展开。</text>
+  <text x="65" y="100" class="tiny">编号按有效迭代层展开；空间沿用现有结构：上方核心生成，下方支持/物理一致性/后处理，灰色为非核心渲染/QC/admin。</text>
+  <rect x="35" y="125" width="2895" height="505" rx="24" class="coreCluster"/>
+  <text x="60" y="155" class="section">核心生成步骤：直接产生标注语义、几何/位姿/接触状态或最终 annotation backing data</text>
+  <rect x="35" y="670" width="2895" height="790" rx="24" class="supportCluster"/>
+  <text x="60" y="700" class="section">支持输入 + 物理一致性 / 后处理 / 校验：缓存证据、reducers、validation、gates</text>
+  <rect x="35" y="1480" width="2895" height="250" rx="24" class="renderCluster"/>
+  <text x="60" y="1510" class="section">灰色非核心步骤：渲染、拼接、manifest、audit、QC、report</text>
+  <rect x="43" y="165" width="344" height="435" rx="16" class="lane" opacity="0.42"/>
+  <text x="215" y="184" text-anchor="middle" class="laneTitle">LLM/VLM 语义</text>
+  <rect x="43" y="710" width="344" height="710" rx="16" class="lane" opacity="0.45"/>
+  <text x="215" y="729" text-anchor="middle" class="laneTitle">LLM/VLM 语义 support/check</text>
+  <rect x="408" y="165" width="344" height="435" rx="16" class="lane" opacity="0.42"/>
+  <text x="580" y="184" text-anchor="middle" class="laneTitle">分割/部件</text>
+  <rect x="408" y="710" width="344" height="710" rx="16" class="lane" opacity="0.45"/>
+  <text x="580" y="729" text-anchor="middle" class="laneTitle">分割/部件 support/check</text>
+  <rect x="773" y="165" width="344" height="435" rx="16" class="lane" opacity="0.42"/>
+  <text x="945" y="184" text-anchor="middle" class="laneTitle">手部姿态</text>
+  <rect x="773" y="710" width="344" height="710" rx="16" class="lane" opacity="0.45"/>
+  <text x="945" y="729" text-anchor="middle" class="laneTitle">手部姿态 support/check</text>
+  <rect x="1138" y="165" width="344" height="435" rx="16" class="lane" opacity="0.42"/>
+  <text x="1310" y="184" text-anchor="middle" class="laneTitle">物体 Mesh/几何</text>
+  <rect x="1138" y="710" width="344" height="710" rx="16" class="lane" opacity="0.45"/>
+  <text x="1310" y="729" text-anchor="middle" class="laneTitle">物体 Mesh/几何 support/check</text>
+  <rect x="1503" y="165" width="344" height="435" rx="16" class="lane" opacity="0.42"/>
+  <text x="1675" y="184" text-anchor="middle" class="laneTitle">相机/深度/尺度</text>
+  <rect x="1503" y="710" width="344" height="710" rx="16" class="lane" opacity="0.45"/>
+  <text x="1675" y="729" text-anchor="middle" class="laneTitle">相机/深度/尺度 support/check</text>
+  <rect x="1868" y="165" width="344" height="435" rx="16" class="lane" opacity="0.42"/>
+  <text x="2040" y="184" text-anchor="middle" class="laneTitle">物体位姿/姿态</text>
+  <rect x="1868" y="710" width="344" height="710" rx="16" class="lane" opacity="0.45"/>
+  <text x="2040" y="729" text-anchor="middle" class="laneTitle">物体位姿/姿态 support/check</text>
+  <rect x="2233" y="165" width="344" height="435" rx="16" class="lane" opacity="0.42"/>
+  <text x="2405" y="184" text-anchor="middle" class="laneTitle">接触/遮挡</text>
+  <rect x="2233" y="710" width="344" height="710" rx="16" class="lane" opacity="0.45"/>
+  <text x="2405" y="729" text-anchor="middle" class="laneTitle">接触/遮挡 support/check</text>
+  <rect x="2598" y="165" width="344" height="435" rx="16" class="lane" opacity="0.42"/>
+  <text x="2770" y="184" text-anchor="middle" class="laneTitle">最终标注组装</text>
+  <rect x="2598" y="710" width="344" height="710" rx="16" class="lane" opacity="0.45"/>
+  <text x="2770" y="729" text-anchor="middle" class="laneTitle">最终标注组装 support/check</text>
+  <rect x="408" y="1530" width="344" height="160" rx="16" class="lane" opacity="0.52"/>
+  <text x="580" y="1549" text-anchor="middle" class="laneTitle">Rendering</text>
+  <rect x="773" y="1530" width="344" height="160" rx="16" class="lane" opacity="0.52"/>
+  <text x="945" y="1549" text-anchor="middle" class="laneTitle">Admin/Input</text>
+  <rect x="1138" y="1530" width="344" height="160" rx="16" class="lane" opacity="0.52"/>
+  <text x="1310" y="1549" text-anchor="middle" class="laneTitle">Reports/Audit</text>
+  <rect x="1868" y="1530" width="344" height="160" rx="16" class="lane" opacity="0.52"/>
+  <text x="2040" y="1549" text-anchor="middle" class="laneTitle">Final QC</text>
+  <path d="M 945 1580 C 945 1594, 945 1594, 945 1608" class="local"/>
+  <path d="M 2040 790 C 2040 804, 2040 804, 2040 818" class="local"/>
+  <path d="M 2040 888 C 2040 902, 2040 902, 2040 916" class="local"/>
+  <path d="M 2040 986 C 2040 1000, 2040 1000, 2040 1014" class="local"/>
+  <path d="M 2040 1084 C 2040 1098, 2040 1098, 2040 1112" class="local"/>
+  <path d="M 945 245 C 945 259, 945 259, 945 273" class="local"/>
+  <path d="M 580 245 C 580 259, 580 259, 580 273" class="local"/>
+  <path d="M 1310 245 C 1310 259, 1310 259, 1310 273" class="local"/>
+  <path d="M 1310 343 C 1310 357, 1310 357, 1310 371" class="local"/>
+  <path d="M 2040 245 C 2040 259, 2040 259, 2040 273" class="local"/>
+  <path d="M 580 1580 C 580 1594, 580 1594, 580 1608" class="local"/>
+  <path d="M 1310 1580 C 1310 1594, 1310 1594, 1310 1608" class="local"/>
+  <path d="M 945 790 C 945 804, 945 804, 945 818" class="local"/>
+  <path d="M 945 888 C 945 902, 945 902, 945 916" class="local"/>
+  <path d="M 580 790 C 580 804, 580 804, 580 818" class="local"/>
+  <path d="M 1310 790 C 1310 804, 1310 804, 1310 818" class="local"/>
+  <path d="M 1310 888 C 1310 902, 1310 902, 1310 916" class="local"/>
+  <path d="M 2405 790 C 2405 804, 2405 804, 2405 818" class="local"/>
+  <path d="M 2770 245 C 2770 259, 2770 259, 2770 273" class="local"/>
+  <path d="M 2770 343 C 2770 357, 2770 357, 2770 371" class="local"/>
+  <path d="M 945 1510 C 1193.2 1510, 1426.8 790, 2040 790" class="dep"/>
+  <path d="M 945 1510 C 945 877.5, 945 877.5, 945 245" class="dep"/>
+  <path d="M 945 1510 C 820.9 1510, 704.1 245, 580 245" class="dep"/>
+  <path d="M 2040 720 C 2040 482.5, 2040 482.5, 2040 245" class="dep"/>
+  <path d="M 1105 210 C 1244.4 210, 1375.6 210, 1880 210" class="dep"/>
+  <path d="M 740 210 C 879.4 210, 1010.6 210, 1150 210" class="dep"/>
+  <path d="M 1470 210 C 1920 210, 1430 210, 1880 210" class="dep"/>
+  <path d="M 2040 245 C 1302.7 245, 952.3 1510, 580 1510" class="dep"/>
+  <path d="M 740 1545 C 879.4 1545, 1010.6 1545, 1150 1545" class="dep"/>
+  <path d="M 1310 1510 C 937.7 1510, 587.3 790, 215 790" class="dep"/>
+  <path d="M 945 245 C 945 482.5, 945 482.5, 945 720" class="dep"/>
+  <path d="M 580 245 C 580 482.5, 580 482.5, 580 720" class="dep"/>
+  <path d="M 1880 755 C 1430 755, 1920 755, 1470 755" class="dep"/>
+  <path d="M 580 245 C 828.2 245, 1061.8 720, 1310 720" class="dep"/>
+  <path d="M 2040 245 C 2164.1 245, 2280.9 720, 2405 720" class="dep"/>
+  <path d="M 1310 790 C 1310 804, 1310 804, 1310 818" class="dep"/>
+  <path d="M 2405 790 C 2156.8 790, 1923.2 818, 1310 818" class="dep"/>
+  <path d="M 215 720 C 215 482.5, 215 482.5, 215 245" class="dep"/>
+  <path d="M 945 790 C 945 804, 945 804, 945 818" class="dep"/>
+  <path d="M 580 720 C 1200.5 720, 2149.5 245, 2770 245" class="dep"/>
+  <path d="M 1310 720 C 1310 531.5, 1310 531.5, 1310 343" class="dep"/>
+  <path d="M 2405 790 C 2280.9 790, 2164.1 818, 2040 818" class="dep"/>
+  <path d="M 1310 888 C 1434.1 888, 1915.9 916, 2040 916" class="dep"/>
+  <path d="M 1105 1643 C 1190 1643, 1065 1643, 1150 1643" class="dep"/>
+  <path d="M 215 245 C 339.1 245, 455.9 273, 580 273" class="dep"/>
+  <path d="M 215 245 C 339.1 245, 455.9 818, 580 818" class="dep"/>
+  <path d="M 945 818 C 1441.4 818, 2273.6 245, 2770 245" class="dep"/>
+  <path d="M 945 888 C 945 902, 945 902, 945 916" class="dep"/>
+  <path d="M 2040 818 C 2288.2 818, 2521.8 245, 2770 245" class="dep"/>
+  <path d="M 2040 818 C 2040 580.5, 2040 580.5, 2040 343" class="dep"/>
+  <path d="M 2770 245 C 2770 482.5, 2770 482.5, 2770 720" class="dep"/>
+  <path d="M 1310 343 C 1310 629.5, 1310 629.5, 1310 916" class="dep"/>
+  <path d="M 1310 343 C 1310 357, 1310 357, 1310 371" class="dep"/>
+  <path d="M 580 343 C 952.3 343, 1302.7 916, 2040 916" class="dep"/>
+  <path d="M 580 343 C 580 580.5, 580 580.5, 580 818" class="dep"/>
+  <path d="M 2040 986 C 2040 1000, 2040 1000, 2040 1014" class="dep"/>
+  <path d="M 2040 986 C 2040 1049, 2040 1049, 2040 1112" class="dep"/>
+  <path d="M 1310 916 C 1310 678.5, 1310 678.5, 1310 441" class="dep"/>
+  <path d="M 1310 916 C 1923.2 916, 2156.8 888, 2405 888" class="dep"/>
+  <path d="M 1310 441 C 1434.1 441, 1915.9 1112, 2040 1112" class="dep"/>
+  <path d="M 2040 1084 C 2040 1098, 2040 1098, 2040 1112" class="dep"/>
+  <path d="M 2405 818 C 2405 531.5, 2405 531.5, 2405 245" class="dep"/>
+  <path d="M 945 916 C 945 629.5, 945 629.5, 945 343" class="dep"/>
+  <path d="M 945 916 C 1317.3 916, 2032.7 245, 2405 245" class="dep"/>
+  <path d="M 2770 720 C 2273.6 720, 1441.4 343, 945 343" class="dep"/>
+  <path d="M 2770 720 C 2770 531.5, 2770 531.5, 2770 343" class="dep"/>
+  <path d="M 2770 720 C 2521.8 720, 2288.2 343, 2040 343" class="dep"/>
+  <path d="M 1105 308 C 1244.4 308, 1375.6 308, 1880 308" class="dep"/>
+  <path d="M 945 273 C 1317.3 273, 2032.7 245, 2405 245" class="dep"/>
+  <path d="M 2610 308 C 2470.6 308, 2339.4 308, 2200 308" class="dep"/>
+  <path d="M 2770 343 C 2521.8 343, 2288.2 1112, 2040 1112" class="dep"/>
+  <path d="M 2770 273 C 2645.9 273, 2529.1 245, 2405 245" class="dep"/>
+  <path d="M 2040 343 C 2040 727.5, 2040 727.5, 2040 1112" class="dep"/>
+  <path d="M 2040 273 C 2164.1 273, 2280.9 245, 2405 245" class="dep"/>
+  <path d="M 2040 1112 C 2288.2 1112, 2521.8 441, 2770 441" class="dep"/>
+  <path d="M 2405 245 C 2529.1 245, 2645.9 371, 2770 371" class="dep"/>
+  <path d="M 2770 441 C 2149.5 441, 1200.5 1608, 580 1608" class="dep"/>
+  <path d="M 580 1608 C 952.3 1608, 1302.7 1580, 2040 1580" class="dep"/>
+  <rect x="785" y="1510" width="320" height="70" rx="13" class="cat_render"/>
+  <rect x="785" y="1510" width="9" height="70" rx="4" class="strip_render"/>
+  <rect x="1051" y="1518" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="1072" y="1530" text-anchor="middle" class="badge">V16</text>
+  <text x="803" y="1532" class="num">1</text>
+  <text x="945" y="1532" text-anchor="middle" class="nodeTitle">Raw video inventory</text>
+  <text x="805" y="1557" class="nodeText">frame count / fps / duration</text>
+  <text x="805" y="1573" class="nodeText">V16 input package contract</text>
+  <rect x="1515" y="720" width="320" height="70" rx="13" class="cat_depth"/>
+  <rect x="1515" y="720" width="9" height="70" rx="4" class="strip_depth"/>
+  <rect x="1781" y="728" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="1802" y="740" text-anchor="middle" class="badge">V16</text>
+  <text x="1533" y="742" class="num">2s</text>
+  <text x="1675.0" y="742" text-anchor="middle" class="nodeTitle">V16 camera/depth support</text>
+  <text x="1535" y="767" class="nodeText">raw frames, masks, intrinsics</text>
+  <text x="1535" y="783" class="nodeText">scale state + depth/QC contract</text>
+  <rect x="785" y="175" width="320" height="70" rx="13" class="cat_hand"/>
+  <rect x="785" y="175" width="9" height="70" rx="4" class="strip_hand"/>
+  <rect x="1051" y="183" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="1072" y="195" text-anchor="middle" class="badge">V16</text>
+  <text x="803" y="197" class="num">3</text>
+  <text x="945" y="197" text-anchor="middle" class="nodeTitle">WiLoR hand pose generation</text>
+  <text x="805" y="222" class="nodeText">MANO pose/shape/joints/verts</text>
+  <text x="805" y="238" class="nodeText">full-timeline V16 hand base</text>
+  <rect x="420" y="175" width="320" height="70" rx="13" class="cat_seg"/>
+  <rect x="420" y="175" width="9" height="70" rx="4" class="strip_seg"/>
+  <rect x="686" y="183" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="707" y="195" text-anchor="middle" class="badge">V16</text>
+  <text x="438" y="197" class="num">4</text>
+  <text x="580" y="197" text-anchor="middle" class="nodeTitle">Object plan + segmentation</text>
+  <text x="440" y="222" class="nodeText">VLM plan + open-vocab/SAM masks</text>
+  <text x="440" y="238" class="nodeText">object identity and spans</text>
+  <rect x="1150" y="175" width="320" height="70" rx="13" class="cat_mesh"/>
+  <rect x="1150" y="175" width="9" height="70" rx="4" class="strip_mesh"/>
+  <rect x="1416" y="183" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="1437" y="195" text-anchor="middle" class="badge">V16</text>
+  <text x="1168" y="197" class="num">5</text>
+  <text x="1310" y="197" text-anchor="middle" class="nodeTitle">Object mesh/render package</text>
+  <text x="1170" y="222" class="nodeText">mesh-style object annotation base</text>
+  <text x="1170" y="238" class="nodeText">V16 object/world visual layer</text>
+  <rect x="1880" y="175" width="320" height="70" rx="13" class="cat_pose"/>
+  <rect x="1880" y="175" width="9" height="70" rx="4" class="strip_pose"/>
+  <rect x="2146" y="183" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="2167" y="195" text-anchor="middle" class="badge">V16</text>
+  <text x="1898" y="197" class="num">6</text>
+  <text x="2040" y="197" text-anchor="middle" class="nodeTitle">V16 factor-graph package</text>
+  <text x="1900" y="222" class="nodeText">camera/hand/object/contact state</text>
+  <text x="1900" y="238" class="nodeText">packaged approximate consistency</text>
+  <rect x="1515" y="371" width="320" height="70" rx="13" class="cat_depth"/>
+  <rect x="1515" y="371" width="9" height="70" rx="4" class="strip_depth"/>
+  <rect x="1781" y="379" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="1802" y="391" text-anchor="middle" class="badge">V16</text>
+  <text x="1533" y="393" class="num">2a</text>
+  <text x="1675.0" y="393" text-anchor="middle" class="nodeTitle">V16 camera trajectory solve</text>
+  <text x="1535" y="418" class="nodeText">DROID/VGGT pose hypotheses</text>
+  <text x="1535" y="434" class="nodeText">T_world_camera + K source</text>
+  <rect x="1515" y="469" width="320" height="70" rx="13" class="cat_depth"/>
+  <rect x="1515" y="469" width="9" height="70" rx="4" class="strip_depth"/>
+  <rect x="1781" y="477" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="1802" y="489" text-anchor="middle" class="badge">V16</text>
+  <text x="1533" y="491" class="num">2b</text>
+  <text x="1675.0" y="491" text-anchor="middle" class="nodeTitle">V16 metric depth solve</text>
+  <text x="1535" y="516" class="nodeText">UniDepth / metric prior maps</text>
+  <text x="1535" y="532" class="nodeText">depth NPZ + scale state</text>
+  <rect x="1515" y="552" width="320" height="70" rx="13" class="cat_depth"/>
+  <rect x="1515" y="552" width="9" height="70" rx="4" class="strip_depth"/>
+  <rect x="1781" y="560" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="1802" y="572" text-anchor="middle" class="badge">V16</text>
+  <text x="1533" y="574" class="num">2c</text>
+  <text x="1675.0" y="574" text-anchor="middle" class="nodeTitle">V16 render-source generation</text>
+  <text x="1535" y="599" class="nodeText">MANO/object/world base videos</text>
+  <text x="1535" y="615" class="nodeText">source frames for V18 overlay</text>
+  <rect x="420" y="1510" width="320" height="70" rx="13" class="cat_render"/>
+  <rect x="420" y="1510" width="9" height="70" rx="4" class="strip_render"/>
+  <rect x="686" y="1518" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="707" y="1530" text-anchor="middle" class="badge">V16</text>
+  <text x="438" y="1532" class="num">7</text>
+  <text x="580" y="1532" text-anchor="middle" class="nodeTitle">V16 full renders</text>
+  <text x="440" y="1557" class="nodeText">overlay/world/side-by-side</text>
+  <text x="440" y="1573" class="nodeText">base videos reused by V18</text>
+  <rect x="1150" y="1510" width="320" height="70" rx="13" class="cat_render"/>
+  <rect x="1150" y="1510" width="9" height="70" rx="4" class="strip_render"/>
+  <rect x="1416" y="1518" width="42" height="17" rx="8" fill="#475467" fill-opacity="0.90"/>
+  <text x="1437" y="1530" text-anchor="middle" class="badge">V16</text>
+  <text x="1168" y="1532" class="num">8</text>
+  <text x="1310" y="1532" text-anchor="middle" class="nodeTitle">V16 QC manifest</text>
+  <text x="1170" y="1557" class="nodeText">v16_full_pipeline_manifest</text>
+  <text x="1170" y="1573" class="nodeText">frame-count/source contract</text>
+  <rect x="55" y="720" width="320" height="70" rx="13" class="cat_semantic"/>
+  <rect x="55" y="720" width="9" height="70" rx="4" class="strip_semantic"/>
+  <rect x="321" y="728" width="42" height="17" rx="8" fill="#1570EF" fill-opacity="0.90"/>
+  <text x="342" y="740" text-anchor="middle" class="badge">V17</text>
+  <text x="73" y="742" class="num">9</text>
+  <text x="215" y="742" text-anchor="middle" class="nodeTitle">V17 measurement store</text>
+  <text x="75" y="767" class="nodeText">ingests V16 + hand/object evidence</text>
+  <text x="75" y="783" class="nodeText">normalized measurement cache</text>
+  <rect x="785" y="720" width="320" height="70" rx="13" class="cat_hand"/>
+  <rect x="785" y="720" width="9" height="70" rx="4" class="strip_hand"/>
+  <rect x="1051" y="728" width="42" height="17" rx="8" fill="#1570EF" fill-opacity="0.90"/>
+  <text x="1072" y="740" text-anchor="middle" class="badge">V17</text>
+  <text x="803" y="742" class="num">10</text>
+  <text x="945" y="742" text-anchor="middle" class="nodeTitle">V17 hand-depth repair</text>
+  <text x="805" y="767" class="nodeText">interior-owned hand/depth graph</text>
+  <text x="805" y="783" class="nodeText">hand-depth residual ownership</text>
+  <rect x="420" y="720" width="320" height="70" rx="13" class="cat_seg"/>
+  <rect x="420" y="720" width="9" height="70" rx="4" class="strip_seg"/>
+  <rect x="686" y="728" width="42" height="17" rx="8" fill="#1570EF" fill-opacity="0.90"/>
+  <text x="707" y="740" text-anchor="middle" class="badge">V17</text>
+  <text x="438" y="742" class="num">11</text>
+  <text x="580" y="742" text-anchor="middle" class="nodeTitle">V17 multi-object timeline</text>
+  <text x="440" y="767" class="nodeText">object roster, masks, boxes</text>
+  <text x="440" y="783" class="nodeText">multi-object active spans</text>
+  <rect x="1150" y="720" width="320" height="70" rx="13" class="cat_mesh"/>
+  <rect x="1150" y="720" width="9" height="70" rx="4" class="strip_mesh"/>
+  <rect x="1416" y="728" width="42" height="17" rx="8" fill="#1570EF" fill-opacity="0.90"/>
+  <text x="1437" y="740" text-anchor="middle" class="badge">V17</text>
+  <text x="1168" y="742" class="num">12</text>
+  <text x="1310" y="742" text-anchor="middle" class="nodeTitle">V17 visible surfaces</text>
+  <text x="1170" y="767" class="nodeText">SAM2 mask + metric depth surfaces</text>
+  <text x="1170" y="783" class="nodeText">material/motion evidence</text>
+  <rect x="2245" y="720" width="320" height="70" rx="13" class="cat_contact"/>
+  <rect x="2245" y="720" width="9" height="70" rx="4" class="strip_contact"/>
+  <rect x="2511" y="728" width="42" height="17" rx="8" fill="#1570EF" fill-opacity="0.90"/>
+  <text x="2532" y="740" text-anchor="middle" class="badge">V17</text>
+  <text x="2263" y="742" class="num">13</text>
+  <text x="2405" y="742" text-anchor="middle" class="nodeTitle">V17 pairwise contact/depth</text>
+  <text x="2265" y="767" class="nodeText">image overlap + depth-gap rows</text>
+  <text x="2265" y="783" class="nodeText">contact owner candidates</text>
+  <rect x="1150" y="818" width="320" height="70" rx="13" class="cat_mesh"/>
+  <rect x="1150" y="818" width="9" height="70" rx="4" class="strip_mesh"/>
+  <rect x="1416" y="826" width="42" height="17" rx="8" fill="#1570EF" fill-opacity="0.90"/>
+  <text x="1437" y="838" text-anchor="middle" class="badge">V17</text>
+  <text x="1168" y="840" class="num">14</text>
+  <text x="1310" y="840" text-anchor="middle" class="nodeTitle">V17 geometry/contact audits</text>
+  <text x="1170" y="865" class="nodeText">object hypotheses + solver jobs</text>
+  <text x="1170" y="881" class="nodeText">failed deliverable, reusable evidence</text>
+  <rect x="785" y="1608" width="320" height="70" rx="13" class="cat_render"/>
+  <rect x="785" y="1608" width="9" height="70" rx="4" class="strip_render"/>
+  <rect x="1051" y="1616" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="1072" y="1628" text-anchor="middle" class="badge">V18-S</text>
+  <text x="803" y="1630" class="num">15</text>
+  <text x="945" y="1630" text-anchor="middle" class="nodeTitle">Runtime/status scaffold</text>
+  <text x="805" y="1655" class="nodeText">runtime manifest + stage order</text>
+  <text x="805" y="1671" class="nodeText">cached-evidence status path</text>
+  <rect x="55" y="175" width="320" height="70" rx="13" class="cat_semantic"/>
+  <rect x="55" y="175" width="9" height="70" rx="4" class="strip_semantic"/>
+  <rect x="321" y="183" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="342" y="195" text-anchor="middle" class="badge">V18-S</text>
+  <text x="73" y="197" class="num">16</text>
+  <text x="215" y="197" text-anchor="middle" class="nodeTitle">Physical state schema</text>
+  <text x="75" y="222" class="nodeText">VLM notes -&gt; rigid/deformable</text>
+  <text x="75" y="238" class="nodeText">part/relative-motion flags</text>
+  <rect x="785" y="818" width="320" height="70" rx="13" class="cat_hand"/>
+  <rect x="785" y="818" width="9" height="70" rx="4" class="strip_hand"/>
+  <rect x="1051" y="826" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="1072" y="838" text-anchor="middle" class="badge">V18-S</text>
+  <text x="803" y="840" class="num">17</text>
+  <text x="945" y="840" text-anchor="middle" class="nodeTitle">Hand + visibility reducers</text>
+  <text x="805" y="865" class="nodeText">hand baseline + visibility state</text>
+  <text x="805" y="881" class="nodeText">cached WiLoR/HaWoR/RTMLib scored</text>
+  <rect x="1880" y="818" width="320" height="70" rx="13" class="cat_pose"/>
+  <rect x="1880" y="818" width="9" height="70" rx="4" class="strip_pose"/>
+  <rect x="2146" y="826" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="2167" y="838" text-anchor="middle" class="badge">V18-S</text>
+  <text x="1898" y="840" class="num">18</text>
+  <text x="2040" y="840" text-anchor="middle" class="nodeTitle">Motion/consistency/bounded</text>
+  <text x="1900" y="865" class="nodeText">fast motion + consistency graph</text>
+  <text x="1900" y="881" class="nodeText">bounded occlusion/contact state</text>
+  <rect x="2610" y="175" width="320" height="70" rx="13" class="cat_final"/>
+  <rect x="2610" y="175" width="9" height="70" rx="4" class="strip_final"/>
+  <rect x="2876" y="183" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="2897" y="195" text-anchor="middle" class="badge">V18-S</text>
+  <text x="2628" y="197" class="num">19</text>
+  <text x="2770" y="197" text-anchor="middle" class="nodeTitle">Annotation state base</text>
+  <text x="2630" y="222" class="nodeText">reducers + timeline -&gt; frames</text>
+  <text x="2630" y="238" class="nodeText">base V18 renderable state</text>
+  <rect x="1150" y="273" width="320" height="70" rx="13" class="cat_mesh"/>
+  <rect x="1150" y="273" width="9" height="70" rx="4" class="strip_mesh"/>
+  <rect x="1416" y="281" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="1437" y="293" text-anchor="middle" class="badge">V18-S</text>
+  <text x="1168" y="295" class="num">20</text>
+  <text x="1310" y="295" text-anchor="middle" class="nodeTitle">Visible geometry gate</text>
+  <text x="1170" y="320" class="nodeText">visible geometry archive</text>
+  <text x="1170" y="336" class="nodeText">object completion eligibility</text>
+  <rect x="420" y="273" width="320" height="70" rx="13" class="cat_seg"/>
+  <rect x="420" y="273" width="9" height="70" rx="4" class="strip_seg"/>
+  <rect x="686" y="281" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="707" y="293" text-anchor="middle" class="badge">V18-S</text>
+  <text x="438" y="295" class="num">21</text>
+  <text x="580" y="295" text-anchor="middle" class="nodeTitle">OWLv2/SAM2 part tracks</text>
+  <text x="440" y="320" class="nodeText">VLM terms -&gt; boxes -&gt; masks</text>
+  <text x="440" y="336" class="nodeText">semantic temporal part evidence</text>
+  <rect x="1880" y="916" width="320" height="70" rx="13" class="cat_pose"/>
+  <rect x="1880" y="916" width="9" height="70" rx="4" class="strip_pose"/>
+  <rect x="2146" y="924" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="2167" y="936" text-anchor="middle" class="badge">V18-S</text>
+  <text x="1898" y="938" class="num">22</text>
+  <text x="2040" y="938" text-anchor="middle" class="nodeTitle">Part pose/residual chain</text>
+  <text x="1900" y="963" class="nodeText">part surfaces, motion, articulation</text>
+  <text x="1900" y="979" class="nodeText">SE(3) residuals + blockers</text>
+  <rect x="420" y="818" width="320" height="70" rx="13" class="cat_seg"/>
+  <rect x="420" y="818" width="9" height="70" rx="4" class="strip_seg"/>
+  <rect x="686" y="826" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="707" y="838" text-anchor="middle" class="badge">V18-S</text>
+  <text x="438" y="840" class="num">23</text>
+  <text x="580" y="840" text-anchor="middle" class="nodeTitle">Promptable mask gates</text>
+  <text x="440" y="865" class="nodeText">SAM proposal probe + acquisition</text>
+  <text x="440" y="881" class="nodeText">promotion gate blocks unvalidated masks</text>
+  <rect x="1150" y="1608" width="320" height="70" rx="13" class="cat_render"/>
+  <rect x="1150" y="1608" width="9" height="70" rx="4" class="strip_render"/>
+  <rect x="1416" y="1616" width="42" height="17" rx="8" fill="#12B76A" fill-opacity="0.90"/>
+  <text x="1437" y="1628" text-anchor="middle" class="badge">V18-S</text>
+  <text x="1168" y="1630" class="num">24</text>
+  <text x="1310" y="1630" text-anchor="middle" class="nodeTitle">Status render/report/audit</text>
+  <text x="1170" y="1655" class="nodeText">status videos, runtime report</text>
+  <text x="1170" y="1671" class="nodeText">manifest refresh + invariant audit</text>
+  <rect x="1515" y="818" width="320" height="70" rx="13" class="cat_depth"/>
+  <rect x="1515" y="818" width="9" height="70" rx="4" class="strip_depth"/>
+  <rect x="1781" y="826" width="42" height="17" rx="8" fill="#F97316" fill-opacity="0.90"/>
+  <text x="1802" y="838" text-anchor="middle" class="badge">V18-X</text>
+  <text x="1533" y="840" class="num">25</text>
+  <text x="1675" y="840" text-anchor="middle" class="nodeTitle">Complete-depth extension</text>
+  <text x="1535" y="865" class="nodeText">camera-depth correction + UniDepth fill</text>
+  <text x="1535" y="881" class="nodeText">complete-depth visible surfaces</text>
+  <rect x="1150" y="371" width="320" height="70" rx="13" class="cat_mesh"/>
+  <rect x="1150" y="371" width="9" height="70" rx="4" class="strip_mesh"/>
+  <rect x="1416" y="379" width="42" height="17" rx="8" fill="#F97316" fill-opacity="0.90"/>
+  <text x="1437" y="391" text-anchor="middle" class="badge">V18-X</text>
+  <text x="1168" y="393" class="num">26</text>
+  <text x="1310" y="393" text-anchor="middle" class="nodeTitle">Depth-fused meshes</text>
+  <text x="1170" y="418" class="nodeText">object/part visible-depth fusion</text>
+  <text x="1170" y="434" class="nodeText">Poisson/hull candidates</text>
+  <rect x="1880" y="1014" width="320" height="70" rx="13" class="cat_pose"/>
+  <rect x="1880" y="1014" width="9" height="70" rx="4" class="strip_pose"/>
+  <rect x="2146" y="1022" width="42" height="17" rx="8" fill="#F97316" fill-opacity="0.90"/>
+  <text x="2167" y="1034" text-anchor="middle" class="badge">V18-X</text>
+  <text x="1898" y="1036" class="num">27</text>
+  <text x="2040" y="1036" text-anchor="middle" class="nodeTitle">Part silhouette pose check</text>
+  <text x="1900" y="1061" class="nodeText">depth/silhouette validation root</text>
+  <text x="1900" y="1077" class="nodeText">frame-local part pose readiness</text>
+  <rect x="2245" y="818" width="320" height="70" rx="13" class="cat_contact"/>
+  <rect x="2245" y="818" width="9" height="70" rx="4" class="strip_contact"/>
+  <rect x="2511" y="826" width="42" height="17" rx="8" fill="#F97316" fill-opacity="0.90"/>
+  <text x="2532" y="838" text-anchor="middle" class="badge">V18-X</text>
+  <text x="2263" y="840" class="num">28</text>
+  <text x="2405" y="840" text-anchor="middle" class="nodeTitle">Contact/NP roots</text>
+  <text x="2265" y="865" class="nodeText">mesh contact + ownership graph</text>
+  <text x="2265" y="881" class="nodeText">signed + triangle nonpenetration</text>
+  <rect x="785" y="916" width="320" height="70" rx="13" class="cat_hand"/>
+  <rect x="785" y="916" width="9" height="70" rx="4" class="strip_hand"/>
+  <rect x="1051" y="924" width="42" height="17" rx="8" fill="#F97316" fill-opacity="0.90"/>
+  <text x="1072" y="936" text-anchor="middle" class="badge">V18-X</text>
+  <text x="803" y="938" class="num">29</text>
+  <text x="945" y="938" text-anchor="middle" class="nodeTitle">HaWoR MANO bridge roots</text>
+  <text x="805" y="963" class="nodeText">metric hand candidates cached</text>
+  <text x="805" y="979" class="nodeText">pose-fill/owner graph roots</text>
+  <rect x="785" y="1014" width="320" height="70" rx="13" class="cat_hand"/>
+  <rect x="785" y="1014" width="9" height="70" rx="4" class="strip_hand"/>
+  <rect x="1045" y="1022" width="52" height="17" rx="8" fill="#F97316" fill-opacity="0.90"/>
+  <text x="1071" y="1034" text-anchor="middle" class="badge">V16/X</text>
+  <text x="803" y="1036" class="num">3s</text>
+  <text x="945" y="1036" text-anchor="middle" class="nodeTitle">Hand pose support/QC</text>
+  <text x="805" y="1061" class="nodeText">RTMLib 2D kpts + hand masks</text>
+  <text x="805" y="1077" class="nodeText">depth residuals score WiLoR/HaWoR</text>
+  <rect x="2610" y="720" width="320" height="70" rx="13" class="cat_final"/>
+  <rect x="2610" y="720" width="9" height="70" rx="4" class="strip_final"/>
+  <rect x="2876" y="728" width="42" height="17" rx="8" fill="#7F56D9" fill-opacity="0.90"/>
+  <text x="2897" y="740" text-anchor="middle" class="badge">V18-F</text>
+  <text x="2628" y="742" class="num">30</text>
+  <text x="2770" y="742" text-anchor="middle" class="nodeTitle">Final evidence load</text>
+  <text x="2630" y="767" class="nodeText">build_case_annotations load block</text>
+  <text x="2630" y="783" class="nodeText">loads V16/V17/V18 roots</text>
+  <rect x="785" y="273" width="320" height="70" rx="13" class="cat_hand"/>
+  <rect x="785" y="273" width="9" height="70" rx="4" class="strip_hand"/>
+  <rect x="1045" y="281" width="52" height="17" rx="8" fill="#F97316" fill-opacity="0.90"/>
+  <text x="1071" y="293" text-anchor="middle" class="badge">V16/X</text>
+  <text x="803" y="295" class="num">3/29</text>
+  <text x="945" y="295" text-anchor="middle" class="nodeTitle">Hand pose generation</text>
+  <text x="805" y="320" class="nodeText">WiLoR/HaWoR MANO candidates</text>
+  <text x="805" y="336" class="nodeText">loaded by V18 final hand state</text>
+  <rect x="2610" y="273" width="320" height="70" rx="13" class="cat_final"/>
+  <rect x="2610" y="273" width="9" height="70" rx="4" class="strip_final"/>
+  <rect x="2876" y="281" width="42" height="17" rx="8" fill="#7F56D9" fill-opacity="0.90"/>
+  <text x="2897" y="293" text-anchor="middle" class="badge">V18-F</text>
+  <text x="2628" y="295" class="num">32</text>
+  <text x="2770" y="295" text-anchor="middle" class="nodeTitle">Object/part/contact assembly</text>
+  <text x="2630" y="320" class="nodeText">object, part, contact loops</text>
+  <text x="2630" y="336" class="nodeText">geometry/schema/evidence fields</text>
+  <rect x="1880" y="273" width="320" height="70" rx="13" class="cat_pose"/>
+  <rect x="1880" y="273" width="9" height="70" rx="4" class="strip_pose"/>
+  <rect x="2146" y="281" width="42" height="17" rx="8" fill="#7F56D9" fill-opacity="0.90"/>
+  <text x="2167" y="293" text-anchor="middle" class="badge">V18-F</text>
+  <text x="1898" y="295" class="num">33</text>
+  <text x="2040" y="295" text-anchor="middle" class="nodeTitle">Factor graph solve</text>
+  <text x="1900" y="320" class="nodeText">sparse LS + Viterbi</text>
+  <text x="1900" y="336" class="nodeText">occlusion min-energy</text>
+  <rect x="1880" y="1112" width="320" height="70" rx="13" class="cat_pose"/>
+  <rect x="1880" y="1112" width="9" height="70" rx="4" class="strip_pose"/>
+  <rect x="2146" y="1120" width="42" height="17" rx="8" fill="#7F56D9" fill-opacity="0.90"/>
+  <text x="2167" y="1132" text-anchor="middle" class="badge">V18-F</text>
+  <text x="1898" y="1134" class="num">34</text>
+  <text x="2040" y="1134" text-anchor="middle" class="nodeTitle">Post-graph pose validation</text>
+  <text x="1900" y="1159" class="nodeText">geometry pose + part/object checks</text>
+  <text x="1900" y="1175" class="nodeText">structured object pose fields</text>
+  <rect x="2245" y="175" width="320" height="70" rx="13" class="cat_contact"/>
+  <rect x="2245" y="175" width="9" height="70" rx="4" class="strip_contact"/>
+  <rect x="2511" y="183" width="42" height="17" rx="8" fill="#7F56D9" fill-opacity="0.90"/>
+  <text x="2532" y="195" text-anchor="middle" class="badge">V18-F</text>
+  <text x="2263" y="197" class="num">35</text>
+  <text x="2405" y="197" text-anchor="middle" class="nodeTitle">Contact physical modes</text>
+  <text x="2265" y="222" class="nodeText">active / near / episode / blocked</text>
+  <text x="2265" y="238" class="nodeText">depth-order contact occlusion</text>
+  <rect x="2610" y="371" width="320" height="70" rx="13" class="cat_final"/>
+  <rect x="2610" y="371" width="9" height="70" rx="4" class="strip_final"/>
+  <rect x="2876" y="379" width="42" height="17" rx="8" fill="#7F56D9" fill-opacity="0.90"/>
+  <text x="2897" y="391" text-anchor="middle" class="badge">V18-F</text>
+  <text x="2628" y="393" class="num">36</text>
+  <text x="2770" y="393" text-anchor="middle" class="nodeTitle">Write final annotations</text>
+  <text x="2630" y="418" class="nodeText">annotations_v18_full.json</text>
+  <text x="2630" y="434" class="nodeText">renderable backing data</text>
+  <rect x="420" y="1608" width="320" height="70" rx="13" class="cat_render"/>
+  <rect x="420" y="1608" width="9" height="70" rx="4" class="strip_render"/>
+  <rect x="686" y="1616" width="42" height="17" rx="8" fill="#7F56D9" fill-opacity="0.90"/>
+  <text x="707" y="1628" text-anchor="middle" class="badge">V18-F</text>
+  <text x="438" y="1630" class="num">37</text>
+  <text x="580" y="1630" text-anchor="middle" class="nodeTitle">Final render videos</text>
+  <text x="440" y="1655" class="nodeText">overlay + world + side-by-side</text>
+  <text x="440" y="1671" class="nodeText">gray non-core output</text>
+  <rect x="1880" y="1510" width="320" height="70" rx="13" class="cat_render"/>
+  <rect x="1880" y="1510" width="9" height="70" rx="4" class="strip_render"/>
+  <rect x="2146" y="1518" width="42" height="17" rx="8" fill="#7F56D9" fill-opacity="0.90"/>
+  <text x="2167" y="1530" text-anchor="middle" class="badge">V18-F</text>
+  <text x="1898" y="1532" class="num">38</text>
+  <text x="2040" y="1532" text-anchor="middle" class="nodeTitle">Final QC/report</text>
+  <text x="1900" y="1557" class="nodeText">ffprobe + full report</text>
+  <text x="1900" y="1573" class="nodeText">self-inspection counts</text>
+  <rect x="55" y="1735" width="2855" height="144" rx="12" fill="#FFFFFF" stroke="#D0D5DD"/>
+  <text x="73" y="1757" class="tiny">有效层：V16=full package cache；V17=measurement/evidence cache；V18-S=measured/status evidence；V18-X=corrective/complete-depth extensions；V18-F=final assembly/render。</text>
+  <rect x="73" y="1775" width="22" height="14" rx="3" fill="#FEF7C3" stroke="#EAAA08"/>
+  <text x="104" y="1785" class="tiny">LLM/VLM 语义</text>
+  <rect x="683" y="1775" width="22" height="14" rx="3" fill="#E0F2FE" stroke="#0284C7"/>
+  <text x="714" y="1785" class="tiny">分割/部件</text>
+  <rect x="1293" y="1775" width="22" height="14" rx="3" fill="#F4EBFF" stroke="#7F56D9"/>
+  <text x="1324" y="1785" class="tiny">手部姿态</text>
+  <rect x="2268" y="1775" width="22" height="14" rx="3" fill="#ECFDF3" stroke="#12B76A"/>
+  <text x="2299" y="1785" class="tiny">物体 Mesh/几何</text>
+  <rect x="73" y="1806" width="22" height="14" rx="3" fill="#EEF4FF" stroke="#6172F3"/>
+  <text x="104" y="1816" class="tiny">物体位姿/姿态</text>
+  <rect x="683" y="1806" width="22" height="14" rx="3" fill="#FFF7ED" stroke="#F97316"/>
+  <text x="714" y="1816" class="tiny">接触/遮挡</text>
+  <rect x="1293" y="1806" width="22" height="14" rx="3" fill="#F2F4F7" stroke="#475467"/>
+  <text x="1324" y="1816" class="tiny">最终标注组装</text>
+  <rect x="2268" y="1806" width="22" height="14" rx="3" fill="#F8FAFC" stroke="#667085"/>
+  <text x="2299" y="1816" class="tiny">非核心渲染/QC</text>
+  <rect x="73" y="1835" width="22" height="14" rx="3" fill="#E6FFFB" stroke="#0E9384"/>
+  <text x="104" y="1845" class="tiny">相机/深度/V16 render source</text>
+  <text x="73" y="1871" class="tiny">浅虚线=关键跨层/跨功能依赖；浅实线=同列局部流。历史 V1–V15 不进入当前 final path；V19 是 proposal。</text>
+</svg>

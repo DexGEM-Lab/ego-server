@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ego.annotation/contracts/v22_resident_transport.schema.json",
+  "title": "V22 resident model transport (archival contract)",
+  "description": "Versioned request/response envelope for the withdrawn four-service resident design. This document records the transport contract without enabling deployment or downloading model code.",
+  "schema_version": "ego.annotation.resident_transport.v22",
+  "deployment_defaults": {
+    "archive_only": true,
+    "deployment_state": "withdrawn",
+    "enabled": false,
+    "default_start_behavior": "refuse",
+    "explicit_start_opt_in": "V22_ARCHIVED_DEPLOYMENT_OPT_IN=1",
+    "authoritative_runtime": "feishu_ray_serve",
+    "conflict_policy": "refuse_if_ports_or_gpu_occupied",
+    "hawor_variant": "hawor_without_droid_slam"
+  },
+  "transport": {
+    "private_endpoints": [
+      "GET /healthz",
+      "GET /readyz",
+      "GET /metrics",
+      "POST /v1/{model}/infer"
+    ],
+    "accepted_models": ["unidepth", "wilor", "hawor", "vggt"],
+    "unresolved_local_paths": "reject",
+    "request_timeout_behavior": "return_explicit_error_and_preserve_provenance",
+    "direct_script_fallback": false,
+    "batch_evidence_required": [
+      "model_load_count",
+      "batch_inference_count",
+      "batch_mode=native_tensor_batch",
+      "batch_tensor_shape",
+      "batch_id",
+      "worker_id"
+    ]
+  },
+  "artifact_cas": {
+    "purpose": "The caller materializes every declared input before inference; the service reads only remote CAS identities.",
+    "artifact_manifest_item_required": [
+      "role",
+      "source_path",
+      "byte_size",
+      "sha256",
+      "remote_object_id"
+    ],
+    "remote_object_id": "cas://sha256/{sha256}",
+    "service_must_not_read": ["source_path", "caller_local_output_dir"],
+    "output_rule": "The service allocates output artifacts below the request-scoped remote output root and returns their CAS identity/path."
+  },
+  "request": {
+    "type": "object",
+    "required": [
+      "job_id",
+      "item_id",
+      "request_id",
+      "attempt_id",
+      "stage_id",
+      "model",
+      "model_identity",
+      "artifacts",
+      "payload"
+    ],
+    "properties": {
+      "job_id": {"type": "string", "minLength": 1},
+      "item_id": {"type": "string", "minLength": 1},
+      "request_id": {"type": "string", "minLength": 1},
+      "attempt_id": {"type": "string", "minLength": 1},
+      "stage_id": {"type": "string", "minLength": 1},
+      "model": {"enum": ["unidepth", "wilor", "hawor", "vggt"]},
+      "model_identity": {
+        "type": "object",
+        "required": ["checkpoint", "submodule_commit", "preprocessing_version"],
+        "properties": {
+          "checkpoint": {"type": "string"},
+          "submodule_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "preprocessing_version": {"type": "string"},
+          "runtime": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "artifacts": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": ["role", "source_path", "byte_size", "sha256", "remote_object_id"],
+          "properties": {
+            "role": {"type": "string"},
+            "source_path": {"type": "string"},
+            "byte_size": {"type": "integer", "minimum": 0},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "remote_object_id": {"type": "string", "pattern": "^cas://sha256/[0-9a-f]{64}$"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "payload": {
+        "type": "object",
+        "required": ["input_artifact_ids", "output_root", "video_metadata", "parameters"],
+        "properties": {
+          "input_artifact_ids": {
+            "type": "object",
+            "description": "Every path-bearing input from the model request is rewritten to a CAS object ID.",
+            "additionalProperties": {"type": "string", "pattern": "^cas://sha256/[0-9a-f]{64}$"}
+          },
+          "output_root": {"type": "string", "pattern": "^cas://outputs/[^/]+$"},
+          "video_metadata": {"type": "object"},
+          "parameters": {"type": "object"},
+          "batch_compatibility": {
+            "type": "object",
+            "required": ["device", "dtype", "preprocessing_version", "state_scope"],
+            "properties": {
+              "device": {"type": "string"},
+              "dtype": {"type": "string"},
+              "preprocessing_version": {"type": "string"},
+              "image_shape": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+              "crop_shape": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+              "sequence_length": {"type": "integer", "minimum": 1},
+              "camera_mode": {"type": "string"},
+              "state_scope": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false
+  },
+  "model_specific_contracts": {
+    "unidepth": {
+      "unit": "rgb_frame",
+      "native_input": "[B,3,H,W]",
+      "compatibility": "same H,W and preprocessing version",
+      "outputs": ["depth_archive", "intrinsics_archive", "source_frame_metadata"]
+    },
+    "wilor": {
+      "unit": "detected_hand_crop",
+      "required_row_fields": ["item_id", "frame_idx", "crop_id", "side", "bbox_xyxy", "source_frame_identity", "crop_preprocessing_version"],
+      "native_input": "[B,3,256,256]",
+      "outputs": ["detector_score", "bbox_xyxy", "handedness", "joints", "vertices", "mano_parameters", "source_provenance"]
+    },
+    "hawor": {
+      "unit": "equal_length_temporal_chunk",
+      "native_input": "[B,T,3,256,256] with T=16 unless model identity declares another supported length",
+      "required_inputs": ["track_or_mask_state", "camera_artifact_when_model_path_requires_it"],
+      "outputs": ["mano_outputs", "visibility", "mask", "uncertainty", "camera_provenance", "state_session_id"],
+      "droid_slam": {
+        "present": false,
+        "forbidden_request_fields": ["droid_shared_manifest", "droid_output_dir", "droid_invocation_count", "droid_scale_provenance"],
+        "forbidden_behaviors": ["import", "instantiate", "invoke", "upload", "caller-directory lookup", "fallback"]
+      }
+    },
+    "vggt": {
+      "unit": "equal_length_related_view_sequence_window",
+      "native_input": "[B,S,3,H,W] with B as independent item/scene axis",
+      "compatibility": "same S, image shape, camera/normalization mode",
+      "outputs": ["camera_artifact", "window_frame_indices", "stitching_status", "gauge_declaration", "scale_or_distortion_limitations"]
+    }
+  },
+  "response": {
+    "type": "object",
+    "required": [
+      "status",
+      "job_id",
+      "item_id",
+      "request_id",
+      "attempt_id",
+      "stage_id",
+      "batch_id",
+      "worker_id",
+      "model_identity",
+      "input_artifact_hashes",
+      "output_artifacts",
+      "model_load_count",
+      "batch_inference_count",
+      "batch_mode",
+      "batch_tensor_shape"
+    ],
+    "properties": {
+      "status": {"enum": ["ok", "error"]},
+      "job_id": {"type": "string"},
+      "item_id": {"type": "string"},
+      "request_id": {"type": "string"},
+      "attempt_id": {"type": "string"},
+      "stage_id": {"type": "string"},
+      "batch_id": {"type": "string"},
+      "worker_id": {"type": "string"},
+      "gpu_id": {"type": "string"},
+      "model_identity": {"type": "object"},
+      "input_artifact_hashes": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+      "output_artifacts": {"type": "array", "items": {"type": "object"}},
+      "error": {"type": ["object", "null"]},
+      "model_load_count": {"type": "integer", "const": 1},
+      "batch_inference_count": {"type": "integer", "minimum": 1},
+      "batch_mode": {"const": "native_tensor_batch"},
+      "batch_tensor_shape": {"type": "array", "minItems": 1},
+      "queue_wait_s": {"type": "number", "minimum": 0},
+      "inference_s": {"type": "number", "minimum": 0},
+      "row_results": {"type": "array"}
+    },
+    "additionalProperties": false
+  },
+  "examples": {
+    "request": {
+      "job_id": "job-001",
+      "item_id": "item-001",
+      "request_id": "req-001",
+      "attempt_id": "attempt-001",
+      "stage_id": "D3_unidepth",
+      "model": "unidepth",
+      "model_identity": {
+        "checkpoint": "unidepth-v2-pinned",
+        "submodule_commit": "8d8cfe4c7ee15297099983607febf0d4f32eb3d6",
+        "preprocessing_version": "rgb-v1"
+      },
+      "artifacts": [
+        {
+          "role": "input_video",
+          "source_path": "/caller/run/video.mp4",
+          "byte_size": 123,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "remote_object_id": "cas://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "payload": {
+        "input_artifact_ids": {"input_video": "cas://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        "output_root": "cas://outputs/req-001",
+        "video_metadata": {"frame_count": 1},
+        "parameters": {}
+      }
+    },
+    "response": {
+      "status": "ok",
+      "job_id": "job-001",
+      "item_id": "item-001",
+      "request_id": "req-001",
+      "attempt_id": "attempt-001",
+      "stage_id": "D3_unidepth",
+      "batch_id": "batch-001",
+      "worker_id": "unidepth-worker-0",
+      "gpu_id": "0",
+      "model_identity": {"checkpoint": "unidepth-v2-pinned"},
+      "input_artifact_hashes": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      "output_artifacts": [{"role": "depth_archive", "remote_object_id": "cas://sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+      "model_load_count": 1,
+      "batch_inference_count": 1,
+      "batch_mode": "native_tensor_batch",
+      "batch_tensor_shape": [2, 3, 1080, 1920],
+      "queue_wait_s": 20.0,
+      "inference_s": 0.0,
+      "row_results": [{"item_id": "item-001", "row_index": 0}]
+    }
+  }
+}

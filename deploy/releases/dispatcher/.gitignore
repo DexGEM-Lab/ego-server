@@ -1,0 +1,14 @@
+/PROMPT.md
+/LOG.md
+.env
+.venv/
+__pycache__/
+*.pyc
+outputs/
+.DS_Store
+.serena/
+.scratch/
+third_party/
+checkpoints/
+# Only machine-local/private memory is ignored. Task and project memory are durable.
+.memory/local/

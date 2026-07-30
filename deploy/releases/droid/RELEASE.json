@@ -1,0 +1,1 @@
+{"release":"ego_model_services_runtime","commit":"c8fc9bd203be8770f32c4f76ec65cd96cda02f82","source_utc":"2026-07-24T12:00:00Z","source_branch":"api-ify","change":"8-GPU topology with DROID multi-replica IPC"}

@@ -1,0 +1,16 @@
+{
+  "archive_name": "service-94a81c7.tar.gz",
+  "archive_sha256": "64b67f107c808c8024010915a0f7299176538377d31c8d09f59c35ceabd03189",
+  "frozen_files": [
+    "ego_annotation/serving/hands.py",
+    "ego_annotation/serving/wilor.py",
+    "ego_annotation/serving/contracts.py",
+    "ego_annotation/serving/transport.py"
+  ],
+  "guard_script": "scripts/guard_ego_serve_log.py",
+  "parent_commit": "ebbe9cb922d03a84cb3cc25bcf8c480e8dd1d0f6",
+  "schema": "ego.service.release.v2",
+  "source_branch": "feat/hands-wilor-split",
+  "source_commit": "94a81c7f5740230caa936dbac041e3c43535e141",
+  "tracked_source_files": 820
+}

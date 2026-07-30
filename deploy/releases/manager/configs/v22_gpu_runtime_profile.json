@@ -1,0 +1,196 @@
+{
+  "schema": "v22_gpu_runtime_profile.v0",
+  "mode": "single_data_sequential_v22_run",
+  "source": "Adapted from feat/parallel GPU-wrapper scheduling semantics without batch claiming or parallel worker launch.",
+  "default_reserve_mb": 2048,
+  "default_lock_dir": "/tmp/v22_gpu_wrapper_locks",
+  "remote_target": {
+    "host": "115.190.235.210",
+    "ssh_command": "ssh -p 57938 zjh@115.190.235.210",
+    "repo_root": "~/ego-annotaion-jiahong-dev",
+    "data_root": "~/data",
+    "compute_label": "zjh@115.190.235.210:A800"
+  },
+  "wrapper": {
+    "script": "scripts/v22_gpu_wrapper.py",
+    "command_template": "python scripts/v22_gpu_wrapper.py --module-id <module_id> --request-mb <estimated_vram_mb> --log-jsonl <run_root>/logs/gpu_wrapper_events.jsonl -- <submodule command>"
+  },
+  "modules": [
+    {
+      "module_id": "M02_S03_depthpro_full_frame_candidate",
+      "stage": "depth_camera",
+      "script": "scripts/run_v21_depthpro_full_frame_candidate.py",
+      "python_bin": "/home/zjh/ego-annation-checkpoints/depthpro_work/ml-depth-pro/.venv/bin/python",
+      "execution": "gpu_wrapper",
+      "estimated_vram_mb": 8192,
+      "estimate_basis": "DepthPro runs from a dedicated remote venv to avoid disturbing the hamer and ego_foundation environments. VRAM budget is conservative until wrapper/resource monitor observations are collected. The required V22 batch depth path remains UniDepth unless the run design enables this optional candidate."
+    },
+    {
+      "module_id": "M02_S04_unidepth_v22_candidate",
+      "stage": "depth_camera",
+      "script": "scripts/run_v21_unidepth.py",
+      "python_bin": "/home/zjh/miniconda3/envs/ego_foundation/bin/python",
+      "execution": "gpu_wrapper",
+      "estimated_vram_mb": 4096,
+      "estimate_basis": "Observed V22 wrapper/resource-monitor peak for tomato single-data run; scheduling budget rounded upward from observed peak. successful wrapper attempt: max memory 3889 MiB, max util 86%, 435.3s",
+      "observed_peak_vram_mb": 3889.0,
+      "observed_from_run": "v22_egoscale_tomato_wrapped_20260704T072615Z"
+    },
+    {
+      "module_id": "M04_S01_rtmlib_hand2d",
+      "stage": "hand_candidates",
+      "script": "scripts/run_rtmlib_hand2d_v3.py",
+      "python_bin": "/home/zjh/miniconda3/envs/hamer/bin/python",
+      "execution": "gpu_wrapper",
+      "estimated_vram_mb": 2048,
+      "estimate_basis": "Observed V22 wrapper/resource-monitor peak for tomato single-data run; scheduling budget rounded upward from observed peak. chunked wrapper attempts: max memory 1849 MiB, max util 98%, 138.5s total",
+      "observed_peak_vram_mb": 1849.0,
+      "observed_from_run": "v22_egoscale_tomato_wrapped_20260704T072615Z"
+    },
+    {
+      "module_id": "M04_S02_wilor_v22_hand_candidates",
+      "stage": "hand_candidates",
+      "script": "scripts/run_v21_wilor_hand_candidates.py",
+      "python_bin": "/home/zjh/miniconda3/envs/hamer/bin/python",
+      "execution": "gpu_wrapper",
+      "estimated_vram_mb": 4096,
+      "estimate_basis": "Observed V22 wrapper/resource-monitor peak for tomato single-data run; scheduling budget rounded upward from observed peak. successful wrapper attempt: max memory 3965 MiB, max util 66%, 412.4s",
+      "observed_peak_vram_mb": 3965.0,
+      "observed_from_run": "v22_egoscale_tomato_wrapped_20260704T072615Z"
+    },
+    {
+      "module_id": "M06_S02_owlv2_bbox_proposals",
+      "stage": "object_candidates",
+      "script": "scripts/run_v21_owlv2_bbox_proposals.py",
+      "python_bin": "/home/zjh/miniconda3/envs/ego_foundation/bin/python",
+      "execution": "gpu_wrapper",
+      "estimated_vram_mb": 4096,
+      "estimate_basis": "Observed V22 wrapper/resource-monitor peak for tomato single-data run; scheduling budget rounded upward from observed peak. successful wrapper attempt: max memory 3021 MiB, max util 64%, 19.9s",
+      "observed_peak_vram_mb": 3021.0,
+      "observed_from_run": "v22_egoscale_tomato_wrapped_20260704T072615Z"
+    },
+    {
+      "module_id": "M07_S01_sam2_proper_segmentation",
+      "stage": "object_tracks",
+      "script": "scripts/run_v21_sam2_proper_segmentation.py",
+      "python_bin": "/home/zjh/miniconda3/envs/ego_foundation/bin/python",
+      "execution": "gpu_wrapper",
+      "estimated_vram_mb": 56320,
+      "estimate_basis": "Observed V22 wrapper/resource-monitor peak for tomato single-data run; scheduling budget rounded upward from observed peak. successful wrapper attempt: max memory 54093 MiB, max util 100%, 1139.6s",
+      "observed_peak_vram_mb": 54093.0,
+      "observed_from_run": "v22_egoscale_tomato_wrapped_20260704T072615Z"
+    },
+    {
+      "module_id": "M08_S01_v22_visible_surface_from_depth",
+      "stage": "object_visible_surface",
+      "script": "scripts/run_v21_visible_surface_from_depth.py",
+      "python_bin": "/home/zjh/miniconda3/envs/ego_foundation/bin/python",
+      "execution": "cpu_direct",
+      "estimated_vram_mb": 0,
+      "estimate_basis": "Visible-surface lifting is CPU geometry, but it imports Open3D through build_v19_visible_geometry_from_sam2_depth.py; the remote ego_foundation environment has open3d while hamer does not."
+    },
+    {
+      "module_id": "M04_S09_hand_candidate_overlay",
+      "stage": "atomic_overlays",
+      "script": "scripts/render_v22_wilor_hand_overlay.py",
+      "execution": "cpu_direct",
+      "estimated_vram_mb": 0,
+      "estimate_basis": "OpenCV rendering and H.264 transcode are CPU-bound in current implementation."
+    },
+    {
+      "module_id": "M03_S07_depth_overlay_and_qc",
+      "stage": "atomic_overlays",
+      "script": "scripts/render_v22_depth_overlay.py",
+      "execution": "cpu_direct",
+      "estimated_vram_mb": 0,
+      "estimate_basis": "Depth colorization uses NumPy/OpenCV and ffmpeg CPU encode."
+    },
+    {
+      "module_id": "M06_M07_keyframe_bbox_mask_evidence_overlay",
+      "stage": "atomic_overlays",
+      "script": "scripts/render_v22_keyframe_evidence_overlay.py",
+      "execution": "cpu_direct",
+      "estimated_vram_mb": 0,
+      "estimate_basis": "Review overlay reads keyframe RGB, approved boxes, and SAM2 masks; no model inference."
+    },
+    {
+      "module_id": "M09_S01_v22_observed_mesh_candidate",
+      "stage": "object_geometry",
+      "script": "scripts/build_v21_mesh_candidate_from_observed.py",
+      "execution": "cpu_direct",
+      "estimated_vram_mb": 0,
+      "enabled_in_default_tomato_single_run": true,
+      "estimate_basis": "Current observed mesh candidate uses accepted SAM2 masks plus selected depth backprojection, NumPy/OpenCV/trimesh, and no CUDA calls. This is not TRELLIS or neural mesh reconstruction."
+    },
+    {
+      "module_id": "M09_S02_reconstruct_object_mesh",
+      "stage": "object_geometry",
+      "script": "scripts/reconstruct_object_mesh_v2.py",
+      "execution": "gpu_wrapper_when_cuda_backend_enabled",
+      "estimated_vram_mb": 24000,
+      "enabled_in_default_tomato_single_run": false,
+      "estimate_basis": "Generic object mesh reconstruction is listed as CPU/GPU in the V22 harness. If the selected backend uses neural reconstruction, CUDA rasterization, diffusion, NeRF/SDF optimization, or learned completion, launch through the wrapper with this budget; pure geometry-only implementations may override to CPU with a recorded reason."
+    },
+    {
+      "module_id": "M09_S03_reconstruct_scaled_observed_mesh",
+      "stage": "object_geometry",
+      "script": "scripts/reconstruct_scaled_observed_object_mesh_v3.py",
+      "execution": "gpu_wrapper_when_cuda_backend_enabled",
+      "estimated_vram_mb": 18000,
+      "enabled_in_default_tomato_single_run": false,
+      "estimate_basis": "Scaled observed-mesh reconstruction can be pure depth/mask geometry or GPU-assisted. The runner must treat CUDA-enabled completion/refinement as GPU-heavy and use the wrapper; CPU-only depth carving remains CPU direct with explicit evidence."
+    },
+    {
+      "module_id": "M09_S04_visual_hull_depth_carve",
+      "stage": "object_geometry",
+      "script": "scripts/reconstruct_object_visual_hull_depth_carve_v3.py",
+      "execution": "cpu_direct_or_gpu_wrapper_by_backend",
+      "estimated_vram_mb": 12000,
+      "enabled_in_default_tomato_single_run": false,
+      "estimate_basis": "Visual-hull/depth-carving is often CPU geometry, but GPU projection/rasterization backends need scheduled VRAM. Use this estimate when the implementation allocates CUDA tensors or GPU rasterizers."
+    },
+    {
+      "module_id": "M09_S07_trellis_mesh_prior",
+      "stage": "object_geometry",
+      "script": "scripts/remote_run_trellis_shape_v3.py",
+      "python_bin": "/home/zjh/miniconda3/envs/ego_foundation/bin/python",
+      "execution": "gpu_wrapper",
+      "estimated_vram_mb": 40000,
+      "enabled_in_default_tomato_single_run": false,
+      "estimate_basis": "TRELLIS-style generative mesh prior is remote GPU-heavy: image/condition encoders plus 3D latent diffusion/decoder and mesh extraction can occupy tens of GiB. Schedule on A800 with a conservative 40 GiB reservation unless measured logs justify lowering it."
+    },
+    {
+      "module_id": "M09_S10_optional_shape_candidate_runners",
+      "stage": "object_geometry",
+      "script": "optional_shape_candidate_backend",
+      "execution": "gpu_wrapper_when_enabled",
+      "estimated_vram_mb": 30000,
+      "enabled_in_default_tomato_single_run": false,
+      "estimate_basis": "Optional learned shape candidates, retrieval-refinement, or neural completion runners are GPU-heavy by default unless the selected backend is documented as CPU-only."
+    },
+    {
+      "module_id": "M10_S02_v22_rigid_pose_fit",
+      "stage": "object_pose",
+      "script": "scripts/solve_v21_rigid_pose_fit.py",
+      "execution": "cpu_direct",
+      "estimated_vram_mb": 0,
+      "estimate_basis": "Current ICP/Umeyama rigid fit is NumPy CPU."
+    },
+    {
+      "module_id": "M10_S14_pose_graph_qc",
+      "stage": "atomic_overlays",
+      "script": "scripts/render_v22_object_pose_overlay.py",
+      "execution": "cpu_direct",
+      "estimated_vram_mb": 0,
+      "estimate_basis": "Current pose overlay samples mesh and projects with NumPy/OpenCV."
+    },
+    {
+      "module_id": "M13_S05_v22_full_annotation_render",
+      "stage": "renders",
+      "script": "scripts/render_v22_final_outputs.py",
+      "execution": "cpu_direct",
+      "estimated_vram_mb": 0,
+      "estimate_basis": "Current final renderer is OpenCV/trimesh projection plus CPU H.264 transcode; no CUDA model inference."
+    }
+  ]
+}
