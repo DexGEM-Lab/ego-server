@@ -1,1 +1,3 @@
 # ego-server
+test
+test
