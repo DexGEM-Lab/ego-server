@@ -599,7 +599,7 @@ def test_droid_original_wire_ordered_sparse_sequence_is_diagnostic_only() -> Non
         def tw(array: np.ndarray) -> dict[str, object]:
             import base64
             return {"data_b64": base64.b64encode(array.tobytes()).decode("ascii"), "shape": list(array.shape), "dtype": array.dtype.name}
-        camera_state = {"ownership": metadata["ownership"], "session_id": state["session"], "T_world_camera": tw(poses), "T_camera_world": tw(poses), "intrinsics_px": tw(intrinsics), "disparities": tw(disparities), "keyframe_mapping": [{"keyframe_index": 0}, {"keyframe_index": 1}], "dense_mapping": [], "uncertainty": {"scale_status": "up_to_scale"}, "model_revision": "droid-v1", "trace": {}}
+        camera_state = {"ownership": metadata["ownership"], "session_id": state["session"], "T_world_camera": tw(poses), "T_camera_world": tw(poses), "intrinsics_px": tw(intrinsics), "disparities": tw(disparities), "keyframe_mapping": [{"keyframe_index": 0, "source_frame_id": "0", "source_timestamp_s": 0.0}, {"keyframe_index": 1, "source_frame_id": "3", "source_timestamp_s": 3 / 25.0}], "dense_mapping": [{"dense_index": 0, "source_frame_id": "0", "source_timestamp_s": 0.0}, {"dense_index": 1, "source_frame_id": "3", "source_timestamp_s": 3 / 25.0}], "uncertainty": {"scale_status": "up_to_scale"}, "model_revision": "droid-v1", "trace": {}}
         return frozen_multipart({"ownership": metadata["ownership"], "camera_state": camera_state}, {"T_world_camera": poses, "T_camera_world": poses, "intrinsics_px": intrinsics, "disparities": disparities})
 
     backend = ApiBackend(ApiBackendConfig.for_stage("droid.create_session"), opener=opener)
@@ -612,6 +612,8 @@ def test_droid_original_wire_ordered_sparse_sequence_is_diagnostic_only() -> Non
     assert finalized.output.diagnostic_only is True
     assert finalized.output.acceptance is False
     assert finalized.output.capabilities.native_sensor_depth_consumed is False
+    assert finalized.output.disparities.provenance["keyframe_source_indices"][1]["source_frame_id"] == "3"
+    assert finalized.output.T_world_camera.provenance["dense_source_indices"][1]["source_frame_id"] == "3"
 
 
 def test_droid_recovery_direction_and_dag_lanes() -> None:
@@ -1016,3 +1018,58 @@ def test_capture_collision_and_atomic_failure_leave_no_valid_fixture(monkeypatch
     assert not list(atomic_root.glob("cosmos3_reason/*/*/manifest.json"))
     assert not list(atomic_root.rglob(".*"))
     assert atomic_backend._capture_counts["cosmos3.reason"] == 0
+
+
+def test_droid_finalize_capture_is_explicit_and_preserves_camera_evidence(tmp_path: Path) -> None:
+    def opener(http_request: Any, _timeout: float) -> FrozenResponse:
+        metadata, _ = parse_like_frozen_server(http_request.data, http_request.get_header("Content-type"))
+        poses = np.eye(4, dtype=np.float32)[None]
+        disparities = np.ones((1, 2, 2), dtype=np.float32)
+        def descriptor(array: np.ndarray) -> dict[str, object]:
+            import base64
+            return {"data_b64": base64.b64encode(array.tobytes()).decode(), "shape": list(array.shape), "dtype": array.dtype.name}
+        camera_state = {
+            "ownership": metadata["ownership"], "session_id": metadata["session_id"],
+            "T_world_camera": descriptor(poses), "T_camera_world": descriptor(poses),
+            "intrinsics_px": descriptor(np.asarray([100., 100., 8., 8.], dtype=np.float32)),
+            "disparities": descriptor(disparities),
+            "keyframe_mapping": [{"keyframe_index": 0, "source_frame_id": "0"}],
+            "dense_mapping": [{"dense_index": 0, "source_frame_id": "0"}],
+            "uncertainty": {"scale_status": "up_to_scale"}, "model_revision": "droid-v1",
+            "trace": {"batch_id": "finalize-fixture", "request_count": 1, "effective_work_units": 1, "replica_id": "replica-0", "fnet_forward_count": 1},
+        }
+        return frozen_multipart(
+            {"ownership": metadata["ownership"], "camera_state": camera_state},
+            {"T_world_camera": poses, "T_camera_world": poses, "intrinsics_px": np.asarray([100., 100., 8., 8.], dtype=np.float32), "disparities": disparities},
+        )
+
+    default_root = tmp_path / "default"
+    default_backend = ApiBackend(ApiBackendConfig.for_stage("droid.finalize", stage_capture_root=str(default_root)), opener=opener)
+    default_backend._sessions["default-session"] = {"pushed_frames": 1}
+    default_backend.execute(make_droid_finalize("default-session"))
+    assert not default_root.exists()
+
+    root = tmp_path / "explicit"
+    backend = ApiBackend(
+        ApiBackendConfig.for_stage("droid.finalize", stage_capture_root=str(root), stage_capture_limits={"droid.finalize": 2}),
+        opener=opener,
+    )
+    backend._sessions["session-a"] = {"pushed_frames": 1}
+    backend._sessions["session-b"] = {"pushed_frames": 1}
+    first = make_droid_finalize("session-a")
+    second = replace(first, input=replace(first.input, ownership=replace(first.input.ownership, scope="droid.finalize:session-b"), session_id="session-b"))
+    backend.execute(first)
+    backend.execute(second)
+    manifests = sorted(root.glob("droid_finalize/*/*/manifest.json"))
+    assert len(manifests) == 2
+    for manifest_path in manifests:
+        response = parse_like_frozen_server(
+            (manifest_path.parent / "response.multipart").read_bytes(),
+            json.loads(manifest_path.read_text(encoding="utf-8"))["response"]["content_type"],
+        )
+        metadata, parts = response
+        camera_state = metadata["camera_state"]
+        assert {"T_world_camera", "T_camera_world", "intrinsics_px", "disparities"}.issubset(parts)
+        assert camera_state["keyframe_mapping"][0]["source_frame_id"] == "0"
+        assert camera_state["dense_mapping"][0]["source_frame_id"] == "0"
+        assert camera_state["trace"]["batch_id"] == "finalize-fixture"

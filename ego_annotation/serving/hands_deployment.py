@@ -17,6 +17,7 @@ from ray import serve
 from starlette.responses import Response, StreamingResponse
 
 from ego_annotation.serving.batching import canonical_batch_size_fn
+from ego_annotation.serving.queue_budget import queued_request_capacity
 from ego_annotation.serving.binary_envelope import (
     CONTENT_TYPE as BINARY_ENVELOPE_CONTENT_TYPE,
     BinaryEnvelope,
@@ -422,7 +423,7 @@ def _wilor_response_to_envelope_wire(response: WiLoRReconstructResponse) -> Resp
     num_replicas=1,
     ray_actor_options=dict(num_gpus=1, runtime_env=_replica_runtime_env()),
     max_ongoing_requests=32,
-    max_queued_requests=128,
+    max_queued_requests=queued_request_capacity("hands.detect"),
 )
 @serve.ingress(build_hands_api)
 class HandsWiLoRDeployment(_HandsWiLoRHttpHandlers):
@@ -434,7 +435,7 @@ class HandsWiLoRDeployment(_HandsWiLoRHttpHandlers):
     num_replicas=1,
     ray_actor_options=dict(num_gpus=1, runtime_env=_replica_runtime_env()),
     max_ongoing_requests=32,
-    max_queued_requests=128,
+    max_queued_requests=queued_request_capacity("hands.detect"),
 )
 @serve.ingress(build_hands_only_api)
 class HandsOnlyDeployment(_HandsWiLoRHttpHandlers):
@@ -449,7 +450,7 @@ class HandsOnlyDeployment(_HandsWiLoRHttpHandlers):
     num_replicas=1,
     ray_actor_options=dict(num_gpus=1, runtime_env=_replica_runtime_env()),
     max_ongoing_requests=32,
-    max_queued_requests=128,
+    max_queued_requests=queued_request_capacity("wilor.reconstruct"),
 )
 @serve.ingress(build_wilor_only_api)
 class WiLoROnlyDeployment(_HandsWiLoRHttpHandlers):

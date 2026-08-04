@@ -10,7 +10,7 @@ from scripts.annotation_admission_proxy import admission_limits
 from scripts.annotation_remote_runner import RemoteConfig, build_pipeline_command
 from scripts.package_v22_annotation_result import PackageError, create_result_package
 from scripts import run_single_video_api
-from scripts.run_single_video_api import STAGES, annotation_client_driver_config, attach_cosmos_capture_hashes, parse_args, parse_service_origins
+from scripts.run_single_video_api import DROID_FINALIZE_CAPTURE_ENV, STAGES, annotation_client_driver_config, attach_cosmos_capture_hashes, parse_args, parse_service_origins, stage_capture_limits_from_environment
 from ego_annotation.full_video_timeline import _droid_prefix_coverage
 from scripts.run_v22_api_job_with_admission import API_IFY_STAGE_IDS
 
@@ -219,10 +219,11 @@ def test_1440_frame_partial_droid_manifest_uses_explicit_camera_coverage_status(
     })())
     manifest = json.loads((run_root / "annotation_pipeline_manifest.json").read_text(encoding="utf-8"))
 
-    assert payload["status"] == "completed_with_partial_camera_coverage"
-    assert manifest["status"] == "completed_with_partial_camera_coverage"
-    assert manifest["droid"]["status"] == "completed_with_partial_camera_coverage"
-    assert manifest["droid"]["unannotated_range"] == [256, 1440]
+    assert payload["status"] == "ok"
+    assert manifest["status"] == "ok"
+    assert manifest["droid"]["status"] == "completed_source_keyed_session_dag"
+    assert manifest["droid"]["effective_unique_coverage_count"] == 1440
+    assert manifest["droid"]["actual_pushed_count"] == 1888
     assert payload["renders"] == {"combined": "renders/v22_combined.mp4"}
     assert manifest["renders"] == {"v22_combined": "renders/v22_combined.mp4", "render_source": "PhysicalArtifactAdapter"}
     assert payload["cosmos"]["captioned_combined_video"] == "renders/v22_combined.mp4"
@@ -282,3 +283,15 @@ def test_api_ify_manifest_has_a_narrow_download_package(tmp_path: Path) -> None:
     assert "stage_captures/fixture_index.json" in names
     assert "state/semantic_clips/v22_cosmos_semantic_review.json" in names
     assert "state/timing_ledger.json" not in names
+
+
+def test_droid_finalize_capture_limit_is_opt_in_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(DROID_FINALIZE_CAPTURE_ENV, raising=False)
+    assert stage_capture_limits_from_environment() == {"cosmos3.reason": 128}
+    monkeypatch.setenv(DROID_FINALIZE_CAPTURE_ENV, "0")
+    assert stage_capture_limits_from_environment() == {"cosmos3.reason": 128}
+    monkeypatch.setenv(DROID_FINALIZE_CAPTURE_ENV, "2")
+    assert stage_capture_limits_from_environment() == {"cosmos3.reason": 128, "droid.finalize": 2}
+    monkeypatch.setenv(DROID_FINALIZE_CAPTURE_ENV, "invalid")
+    with pytest.raises(ValueError, match=DROID_FINALIZE_CAPTURE_ENV):
+        stage_capture_limits_from_environment()

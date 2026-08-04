@@ -51,6 +51,7 @@ from starlette.requests import Request
 from starlette.responses import Response as StarletteResponse, StreamingResponse
 
 from ego_annotation.serving.batching import canonical_batch_size_fn
+from ego_annotation.serving.queue_budget import queued_request_capacity
 from ego_annotation.serving.binary_envelope import (
     CONTENT_TYPE as BINARY_ENVELOPE_CONTENT_TYPE,
     BinaryEnvelope,
@@ -309,7 +310,7 @@ def _hawor_result_to_multipart(result: Any, ownership: Any) -> StarletteResponse
     num_replicas=1,
     ray_actor_options={"num_gpus": 0.5},
     max_ongoing_requests=16,
-    max_queued_requests=64,
+    max_queued_requests=queued_request_capacity("hawor.infer_tracks"),
 )
 class HaWoRDeployment:
     def __init__(self) -> None:
@@ -365,7 +366,7 @@ class HaWoRDeployment:
     num_replicas=1,
     ray_actor_options={"num_gpus": 0.5},
     max_ongoing_requests=8,
-    max_queued_requests=64,
+    max_queued_requests=queued_request_capacity("hawor_infiller.fill"),
 )
 class InfillerDeployment:
     def __init__(self) -> None:

@@ -30,6 +30,7 @@ import os
 from typing import Any
 
 from ray import serve
+from ego_annotation.serving.queue_budget import queued_request_capacity
 from starlette.responses import Response
 
 from ego_annotation.serving.contracts import (
@@ -76,7 +77,7 @@ def _config_from_env() -> Any:
     },
     # vLLM owns the running batch; these bound the Serve admission queue only.
     max_ongoing_requests=16,
-    max_queued_requests=32,
+    max_queued_requests=queued_request_capacity("cosmos3.reason"),
 )
 class Cosmos3Deployment:
     def __init__(self) -> None:

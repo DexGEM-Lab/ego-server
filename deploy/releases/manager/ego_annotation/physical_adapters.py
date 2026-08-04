@@ -788,18 +788,31 @@ def _world_canvas(
                 if -30 <= x <= width + 30 and -30 <= y <= height + 30:
                     cv2.circle(canvas, (x, y), 2, HAND_COLORS[side], -1, cv2.LINE_AA)
     _draw_hand_inset(canvas, inset_hands)
-    cv2.putText(canvas, "3D camera-left world view: current camera fixed left", (16, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (245, 245, 245), 2, cv2.LINE_AA)
-    label = "metric gauge: fixed camera-left DROID frame + MANO | units: meters"
+    cv2.putText(canvas, "3D global-world view: fixed clip presentation; physical camera per frame", (16, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (245, 245, 245), 2, cv2.LINE_AA)
+    label = "world gauge: T_world_camera + world MANO | units: meters"
     if frame_index is not None:
         label = f"frame {frame_index:06d} | {label}"
     cv2.putText(canvas, label, (16, height - 42), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (230, 235, 240), 1, cv2.LINE_AA)
-    cv2.putText(canvas, "blue=past camera path | red=fixed left frustum | green=left MANO | yellow=right MANO", (16, height - 17), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (210, 218, 228), 1, cv2.LINE_AA)
+    cv2.putText(canvas, "blue=camera path | red=physical camera frustum | green=left MANO | yellow=right MANO", (16, height - 17), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (210, 218, 228), 1, cv2.LINE_AA)
     return canvas
 
 
 def _add_counts(total: dict[str, int], update: Mapping[str, int]) -> None:
     for key, value in update.items():
         total[key] = total.get(key, 0) + int(value)
+
+
+def resize_to_cover(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Resize and center-crop an image so every pane pixel is occupied."""
+    width, height = size
+    value = np.asarray(image)
+    if value.ndim != 3 or value.shape[2] != 3 or width <= 0 or height <= 0:
+        raise PhysicalAdapterError("cover resize expects HWC RGB/BGR image and positive size")
+    scale = max(width / value.shape[1], height / value.shape[0])
+    resized = cv2.resize(value, (max(width, int(round(value.shape[1] * scale))), max(height, int(round(value.shape[0] * scale)))), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
+    y0 = max(0, (resized.shape[0] - height) // 2)
+    x0 = max(0, (resized.shape[1] - width) // 2)
+    return np.ascontiguousarray(resized[y0:y0 + height, x0:x0 + width])
 
 
 class PhysicalArtifactAdapter:
@@ -818,6 +831,7 @@ class PhysicalArtifactAdapter:
         if source.timeline.source_sha256 != timeline.source_sha256:
             raise PhysicalAdapterError("source timeline identity changed before physical rendering")
         droid = state.droid_records.final.output
+        droid_scale_provenance = dict(getattr(droid, "scale_provenance", {}))
         poses, droid_pose_valid = _pose_array_with_validity(droid.T_world_camera, state.frame_count)
         if not np.array_equal(droid_pose_valid, np.asarray(state.droid_records.coverage.pose_valid, dtype=bool)):
             raise PhysicalAdapterError("DROID record coverage diverges from pose validity")
@@ -845,9 +859,34 @@ class PhysicalArtifactAdapter:
                     joints_world[frame_index] = transform_points(camera_joints[frame_index], poses[frame_index])
             world_vertices.append(vertices_world)
             world_joints.append(joints_world)
-        camera_centric_view, camera_relative_joints, camera_centric_reference_frame, camera_centric_display_rotation = _camera_centric_world_view(poses, world_joints, self.render_size)
-        if len(camera_relative_joints) != 2 or any(len(values) != state.frame_count for values in camera_relative_joints):
-            raise PhysicalAdapterError("camera-relative world display did not cover the full timeline")
+        # Fit one clip-level world view.  The presentation camera is fixed; only
+        # the physical camera marker and world trajectory advance per frame.
+        camera_centric_view = _build_world_view(camera_centers, world_joints, self.render_size)
+        camera_centric_reference_frame = None
+        camera_centric_display_rotation = np.eye(3, dtype=np.float64)
+        # Keep both anatomical sides in the pose contract.  A single frame can
+        # contain two valid wrists; collapsing to one side would silently lose
+        # part of the reference-aligned state.
+        camera_wrist = np.full((2, state.frame_count, 4, 4), np.nan, dtype=np.float32)
+        world_wrist = np.full((2, state.frame_count, 4, 4), np.nan, dtype=np.float32)
+        wrist_valid = np.zeros((2, state.frame_count), dtype=bool)
+        root_orient_tensor = getattr(state.timeline_inference, "root_orient", None)
+        for side in range(2):
+            for frame_index in range(state.frame_count):
+                joints = np.asarray(world_joints[side][frame_index])
+                if joints.shape != (21, 3) or not np.isfinite(joints[0]).all() or not droid_pose_valid[frame_index]:
+                    continue
+                wrist_world = np.asarray(joints[0], dtype=np.float32)
+                wrist_camera = transform_points(wrist_world[None], np.linalg.inv(poses[frame_index]))[0]
+                camera_wrist[side, frame_index] = np.eye(4, dtype=np.float32)
+                root_orient = np.eye(3, dtype=np.float32)
+                if root_orient_tensor is not None:
+                    root_orient = np.asarray(root_orient_tensor.array[side, frame_index], dtype=np.float32)
+                if root_orient.shape == (3, 3) and np.isfinite(root_orient).all() and np.allclose(root_orient.T @ root_orient, np.eye(3), atol=2e-3) and np.linalg.det(root_orient) > 0.0:
+                    camera_wrist[side, frame_index, :3, :3] = root_orient
+                camera_wrist[side, frame_index, :3, 3] = wrist_camera
+                world_wrist[side, frame_index] = poses[frame_index] @ camera_wrist[side, frame_index]
+                wrist_valid[side, frame_index] = True
 
         state_npz = state_dir / "v22_physical_state.npz"
         npz_write_started = time.monotonic()
@@ -864,9 +903,21 @@ class PhysicalArtifactAdapter:
             ),
             droid_source_frame_count=np.asarray([state.droid_records.coverage.source_frame_count], dtype=np.int32),
             droid_submitted_count=np.asarray([state.droid_records.coverage.submitted_count], dtype=np.int32),
-            droid_unannotated_range=np.asarray(state.droid_records.coverage.unannotated_range or [-1, -1], dtype=np.int32),
+            droid_unannotated_range=np.asarray(
+                getattr(state.droid_records.coverage, "unannotated_range", None) or [-1, -1],
+                dtype=np.int32,
+            ),
             droid_coverage_status=np.asarray([state.droid_records.coverage.to_wire()["status"]]),
             droid_coverage_reason=np.asarray([state.droid_records.coverage.to_wire().get("reason") or ""]),
+            pose_frame_idx=np.arange(state.frame_count, dtype=np.int32),
+            pose_timestamp_s=np.asarray(timeline.timestamps_s, dtype=np.float64),
+            T_camera_wrist=camera_wrist,
+            T_world_wrist=world_wrist,
+            wrist_pose_valid=wrist_valid.astype(np.uint8),
+            pose_convention=np.asarray(["T_world_wrist = T_world_camera @ T_camera_wrist"]),
+            pose_provenance=np.asarray(["same-frame MANO joint-0 wrist; camera/world rigid transform"]),
+            droid_scale_scalar=np.asarray([float(droid_scale_provenance.get("scale", np.nan))], dtype=np.float64),
+            droid_scale_provenance_json=np.asarray([json.dumps(droid_scale_provenance, sort_keys=True)]),
             K_canonical=k,
             left_vertices_world_m=world_vertices[0], right_vertices_world_m=world_vertices[1],
             left_joints_world_m=world_joints[0], right_joints_world_m=world_joints[1],
@@ -884,7 +935,7 @@ class PhysicalArtifactAdapter:
         validate_semantic_coverage(state.semantic_rows, state.frame_count)
         anomaly_count = sum(len(semantic_row_anomalies(row)) for row in state.semantic_rows)
         width, height = self.render_size
-        combined_size = (timeline.width_px + width, max(timeline.height_px, height))
+        combined_size = (width * 2, height)
         combined_path = renders / "v22_combined.mp4"
         writer = cv2.VideoWriter(str(combined_path), cv2.VideoWriter_fourcc(*"mp4v"), timeline.fps, combined_size)
         if not writer.isOpened():
@@ -915,8 +966,8 @@ class PhysicalArtifactAdapter:
                     else:
                         _add_counts(overlay_counts, _draw_projected_hand(overlay, camera_vertices, camera_joints, k, color))
                     if droid_pose_valid[frame_index]:
-                        current_world_joints[side_index] = camera_relative_joints[side_index][frame_index]
-                        current_world_vertices[side_index] = _world_to_camera_display(world_vertices[side_index][frame_index], poses[frame_index], camera_centric_display_rotation)
+                        current_world_joints[side_index] = world_joints[side_index][frame_index]
+                        current_world_vertices[side_index] = world_vertices[side_index][frame_index]
 
                 caption, semantic_cursor = caption_for_frame(state.semantic_rows, frame_index, semantic_cursor)
                 anomalies = semantic_row_anomalies(state.semantic_rows[semantic_cursor])
@@ -924,21 +975,14 @@ class PhysicalArtifactAdapter:
                     rendered_anomaly_frames += 1
                 draw_semantic_caption(overlay, caption, anomalies)
 
-                # The camera and current hands are in the current camera frame,
-                # so they stay stable on-screen. The past world camera centers
-                # alone move, through the same current-frame transformation.
-                relative_path = (
-                    _world_to_camera_display(camera_centers[: frame_index + 1], poses[frame_index], camera_centric_display_rotation)
-                    if droid_pose_valid[frame_index]
-                    else np.empty((0, 3), dtype=np.float64)
-                )
+                # Keep the presentation view in one global world gauge; the
+                # current physical camera and its oriented frustum move through it.
+                relative_path = camera_centers[: frame_index + 1] if droid_pose_valid[frame_index] else np.empty((0, 3), dtype=np.float64)
+                frame_view = replace(camera_centric_view, camera_anchor=poses[frame_index, :3, 3]) if droid_pose_valid[frame_index] else camera_centric_view
                 world = _world_canvas(
-                    current_world_joints,
-                    relative_path,
-                    (width, height),
-                    view=camera_centric_view,
+                    current_world_joints, relative_path, (width, height), view=frame_view,
                     vertices=current_world_vertices,
-                    camera_rotation=np.eye(3, dtype=np.float64),
+                    camera_rotation=poses[frame_index, :3, :3] if droid_pose_valid[frame_index] else None,
                     frame_index=frame_index,
                 )
                 if droid_pose_valid[frame_index]:
@@ -952,9 +996,9 @@ class PhysicalArtifactAdapter:
                         cv2.rectangle(canvas, (0, 0), (canvas_width, 40), (0, 0, 0), -1)
                         cv2.putText(canvas, marker, (12, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 215, 255), 1, cv2.LINE_AA)
 
-                combined = np.full((combined_size[1], combined_size[0], 3), 248, dtype=np.uint8)
-                combined[: timeline.height_px, : timeline.width_px] = overlay
-                combined[:height, timeline.width_px:] = world
+                combined = np.zeros((height, width * 2, 3), dtype=np.uint8)
+                combined[:, :width] = resize_to_cover(overlay, (width, height))
+                combined[:, width:] = resize_to_cover(world, (width, height))
                 write_started = time.monotonic()
                 writer.write(combined)
                 local_write_encode_s += time.monotonic() - write_started
@@ -972,7 +1016,7 @@ class PhysicalArtifactAdapter:
             "frame_count": state.frame_count,
             "video_frame_count": world_counts["frames"],
             "render_size": [width, height],
-            "view_mode": "fixed_camera_left_perspective_with_current_camera_left_and_moving_history_path",
+            "view_mode": "fixed_clip_level_global_world_perspective_with_per_frame_physical_camera",
             "world_gauge_source": "DROID_T_world_camera_inverse_transform_and_timeline_MANO_world_m",
             "metric_extent_center_xyz_m": report_view.center.astype(float).tolist(),
             "metric_extent_span_m": float(report_view.span),
@@ -980,8 +1024,9 @@ class PhysicalArtifactAdapter:
             "view_target_xyz_m": report_view.target.astype(float).tolist(),
             "view_trajectory_forward_xyz": report_view.trajectory_forward.astype(float).tolist(),
             "view_focal_scale": float(report_view.focal_scale),
-            "view_fit_extent": "fixed_central_camera_to_bilateral_hand_distance_with_10th_to_90th_percentile_hand_offsets",
+            "view_fit_extent": "fixed_clip_camera_and_hand_2nd_to_98th_percentile_world_extent",
             "camera_centric_reference_frame": camera_centric_reference_frame,
+            "pose_state": {"frame_identity": "frame_idx", "timestamp": "frame_idx/fps", "wrist_valid_count": int(np.count_nonzero(wrist_valid)), "convention": "T_world_wrist = T_world_camera @ T_camera_wrist"},
             "camera_centric_display_rotation": camera_centric_display_rotation.astype(float).tolist(),
             "framing_window_frames": None,
             "framing_smoothing_frames": None,
@@ -1004,6 +1049,7 @@ class PhysicalArtifactAdapter:
             "diagnostic_only": bool(state.acceptance.diagnostic_only),
             "acceptance_reasons": list(state.acceptance.reasons),
             "droid_coverage": state.droid_records.coverage.to_wire(),
+            "droid_scale_provenance": droid_scale_provenance,
             "droid_sampled_frame_count": int(np.count_nonzero(np.asarray(state.droid_records.coverage.pose_sampled if state.droid_records.coverage.pose_sampled is not None else state.droid_records.coverage.pose_valid, dtype=bool))),
             "droid_capacity_marker_frame_count": int(np.count_nonzero(~droid_pose_valid)),
             "hawor_geometry_diagnostics": state.hawor_geometry_diagnostics,

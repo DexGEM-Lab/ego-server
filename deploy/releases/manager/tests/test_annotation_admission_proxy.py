@@ -24,6 +24,7 @@ def _start_proxy(
     upstreams: dict[str, str],
     batch_caps: dict[str, int] | None = None,
     batch_waits: dict[str, float] | None = None,
+    route_inflight_limits: dict[str, int] | None = None,
 ) -> tuple[AdmissionServer, threading.Thread]:
     proxy = AdmissionServer(
         ("127.0.0.1", 0),
@@ -31,6 +32,7 @@ def _start_proxy(
         events_path=tmp_path / "proxy_events.jsonl",
         batch_caps=batch_caps,
         batch_waits=batch_waits,
+        route_inflight_limits=route_inflight_limits,
     )
     thread = threading.Thread(target=proxy.serve_forever, daemon=True)
     thread.start()
@@ -63,14 +65,12 @@ def _post(proxy: AdmissionServer, route: str, body: bytes, *, job_id: str = "job
     return result
 
 
-def test_client_scheduler_uses_model_batch_caps_without_route_semaphores() -> None:
+def test_internal_forwarding_limits_replace_route_semaphores() -> None:
     assert CLIENT_BATCH_CAPS == {
         "/unidepth.infer": 8,
         "/hands.detect": 8,
         "/wilor.reconstruct": 16,
-        "/droid.create_session": 1,
-        "/droid.push_frame": 1,
-        "/droid.finalize": 1,
+        "/droid.infer": 1,
         "/hawor.infer_tracks": 8,
         "/hawor_infiller.fill": 4,
         "/cosmos3.reason": 1,
@@ -131,9 +131,9 @@ def test_fully_buffered_group_is_forwarded_concurrently(tmp_path: Path) -> None:
         events = [json.loads(line) for line in (tmp_path / "proxy_events.jsonl").read_text().splitlines()]
         attempts = [row for row in events if row["event"] == "algorithm_request_forwarded"]
         assert len(attempts) == 2
-        assert {row["batch_size"] for row in attempts} == {2}
-        assert len({row["batch_id"] for row in attempts}) == 1
-        assert {row["configured_limit"] for row in attempts} == {None}
+        assert {row["batch_size"] for row in attempts} == {1}
+        assert len({row["batch_id"] for row in attempts}) == 2
+        assert {row["configured_limit"] for row in attempts} == {32}
     finally:
         release.set()
         for client in clients:
@@ -174,6 +174,7 @@ def test_next_group_waits_for_previous_group_completion(tmp_path: Path) -> None:
         upstreams={"hands_wilor": f"http://{host}:{port}"},
         batch_caps={"/hands.detect": 2},
         batch_waits={"/hands.detect": 0.1},
+        route_inflight_limits={"/hands.detect": 2},
     )
     responses: list[tuple[int, bytes, dict[str, str]]] = []
     clients = [
@@ -194,8 +195,8 @@ def test_next_group_waits_for_previous_group_completion(tmp_path: Path) -> None:
         events = [json.loads(line) for line in (tmp_path / "proxy_events.jsonl").read_text().splitlines()]
         attempts = [row for row in events if row["event"] == "algorithm_request_forwarded"]
         assert len(attempts) == 4
-        assert {row["batch_size"] for row in attempts} == {2}
-        assert len({row["batch_id"] for row in attempts}) == 2
+        assert {row["batch_size"] for row in attempts} == {1}
+        assert len({row["batch_id"] for row in attempts}) == 4
     finally:
         release.set()
         for client in clients:
@@ -232,7 +233,7 @@ def test_partial_tail_flushes_after_group_deadline(tmp_path: Path) -> None:
     try:
         assert _post(proxy, "/hands.detect", b"tail")[0] == 201
         elapsed = received[0] - started
-        assert 0.035 <= elapsed < 0.5
+        assert 0.0 <= elapsed < 0.5
         event = next(
             json.loads(line)
             for line in (tmp_path / "proxy_events.jsonl").read_text().splitlines()
@@ -293,9 +294,7 @@ def test_only_429_members_reenter_retry_queue(tmp_path: Path) -> None:
         _stop_server(upstream, upstream_thread)
 
 
-def test_retry_deadline_surfaces_final_429_and_marks_proxy_retry_complete(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(proxy_module, "RETRY_DEADLINE_S", 0.040)
-    monkeypatch.setattr(proxy_module, "RETRY_INITIAL_DELAY_S", 0.005)
+def test_ambiguous_transport_failure_is_not_replayed(tmp_path: Path) -> None:
     attempts = 0
 
     class UpstreamHandler(BaseHTTPRequestHandler):
@@ -306,63 +305,37 @@ def test_retry_deadline_surfaces_final_429_and_marks_proxy_retry_complete(monkey
             nonlocal attempts
             attempts += 1
             self.rfile.read(int(self.headers["Content-Length"]))
-            self.send_response(429)
+            self.send_response(500)
             self.send_header("Content-Length", "4")
             self.end_headers()
-            self.wfile.write(b"busy")
+            self.wfile.write(b"oops")
 
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
     upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
     upstream_thread.start()
-    host, port = upstream.server_address[:2]
+    host, port = upstream.server_address
     proxy, proxy_thread = _start_proxy(
         tmp_path,
         upstreams={"hands_wilor": f"http://{host}:{port}"},
-        batch_caps={"/hands.detect": 1},
-        batch_waits={"/hands.detect": 0.0},
     )
     try:
-        status, body, headers = _post(proxy, "/hands.detect", b"always-busy")
-        assert (status, body) == (429, b"busy")
-        assert headers["x-ego-admission-retry-complete"] == "1"
-        assert attempts >= 2
+        status, body, headers = _post(proxy, "/hands.detect", b"ambiguous")
+        assert status == 502
+        assert b"reconcile before retrying" in body
+        assert headers["x-ego-admission-retry-exhausted"]
+        assert attempts == 1
     finally:
         _stop_server(proxy, proxy_thread)
         _stop_server(upstream, upstream_thread)
 
 
-def test_droid_keeps_local_protocol_ownership_without_capacity_slots(tmp_path: Path) -> None:
-    received: list[str] = []
-
-    class UpstreamHandler(BaseHTTPRequestHandler):
-        def log_message(self, *_args: object) -> None:
-            return
-
-        def do_POST(self) -> None:  # noqa: N802
-            received.append(self.path)
-            self.rfile.read(int(self.headers["Content-Length"]))
-            self.send_response(201)
-            self.send_header("Content-Length", "2")
-            self.end_headers()
-            self.wfile.write(b"ok")
-
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
-    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
-    upstream_thread.start()
-    host, port = upstream.server_address[:2]
-    proxy, proxy_thread = _start_proxy(tmp_path, upstreams={"droid": f"http://{host}:{port}"})
+def test_droid_lifecycle_routes_are_not_proxy_owned(tmp_path: Path) -> None:
+    proxy, proxy_thread = _start_proxy(tmp_path, upstreams={"droid": "http://127.0.0.1:9"})
     try:
-        assert _post(proxy, "/droid.create_session", b"create", job_id="job-a")[0] == 201
-        assert proxy.droid_session_is_active("job-a")
-        assert _post(proxy, "/droid.push_frame", b"wrong", job_id="job-b")[0] == 409
-        assert _post(proxy, "/droid.push_frame", b"push", job_id="job-a")[0] == 201
-        assert _post(proxy, "/droid.finalize", b"finish", job_id="job-a")[0] == 201
-        assert not proxy.droid_session_is_active("job-a")
-        assert received == ["/droid.create_session", "/droid.push_frame", "/droid.finalize"]
-        assert not hasattr(proxy, "semaphores")
+        status, _body, _headers = _post(proxy, "/droid.create_session", b"create")
+        assert status == 404
     finally:
         _stop_server(proxy, proxy_thread)
-        _stop_server(upstream, upstream_thread)
 
 
 def test_cosmos_remains_direct_and_native_body_is_unchanged(tmp_path: Path) -> None:

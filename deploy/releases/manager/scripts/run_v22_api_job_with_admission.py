@@ -10,13 +10,15 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# The current API-Ify client exposes DROID as the three lifecycle routes
+# droid.create_session/push_frame/finalize.  The admission proxy only exposes
+# the legacy atomic /droid.infer endpoint, so leave DROID on its native A800
+# localhost origin instead of injecting the stale alias and failing client-side
+# stage validation.  Stateless stages continue to use the admission proxy.
 API_IFY_STAGE_IDS = (
     "unidepth.infer",
     "hands.detect",
     "wilor.reconstruct",
-    "droid.create_session",
-    "droid.push_frame",
-    "droid.finalize",
     "hawor.infer_tracks",
     "hawor_infiller.fill",
     "cosmos3.reason",
@@ -74,8 +76,8 @@ def main() -> int:
     args.lock_root.mkdir(parents=True, exist_ok=True)
     # The wrapper owns no fixed per-algorithm reservation. Its local proxy
     # groups fully buffered stateless requests by native batch cap and retries
-    # only rejected 429 items; DROID retains only local create/push/finalize
-    # ownership ordering, and Cosmos continues to use vLLM-owned scheduling.
+    # only rejected 429 items; DROID occupies one bounded single-push slot per
+    # request, and Cosmos continues to use vLLM-owned scheduling.
     with running_proxy(
         host=args.proxy_host,
         port=args.proxy_port,

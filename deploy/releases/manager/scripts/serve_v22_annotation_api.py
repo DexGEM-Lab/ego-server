@@ -93,8 +93,8 @@ def admission_summary(*, total_request_limit: int | None = None, algorithm_infli
     return {
         "total_request_limit": int(total_request_limit if total_request_limit is not None else TOTAL_REQUEST_LIMIT),
         "algorithm_inflight_multiplier": int(algorithm_inflight_multiplier if algorithm_inflight_multiplier is not None else ALGORITHM_INFLIGHT_MULTIPLIER),
-        "algorithm_inflight_multiplier_policy": "compatibility_ignored_by_client_batch_scheduler",
-        "admission_boundary": "api_request_semaphore_plus_client_batch_scheduler",
+        "algorithm_inflight_multiplier_policy": "compatibility_ignored_by_image_weighted_proxy",
+        "admission_boundary": "api_request_semaphore_plus_image_weighted_internal_proxy",
     }
 
 

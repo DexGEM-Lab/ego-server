@@ -171,8 +171,8 @@ class ApiBackendConfig:
         if isinstance(self.stage_capture_limit, bool) or not isinstance(self.stage_capture_limit, int) or self.stage_capture_limit <= 0:
             raise ValueError("stage_capture_limit must be a positive integer")
         for stage_id, limit in self.stage_capture_limits.items():
-            if stage_id not in {"hawor.infer_tracks", "hawor_infiller.fill", "cosmos3.reason"} or isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-                raise ValueError("stage_capture_limits must name captured stages with positive integer limits")
+            if stage_id not in {"hawor.infer_tracks", "hawor_infiller.fill", "cosmos3.reason", "droid.finalize"} or isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+                raise ValueError("stage_capture_limits must name explicitly capturable stages with positive integer limits")
         for stage_id, origin in self.service_origins.items():
             parsed_origin = urlsplit(origin)
             if stage_id not in A800_SERVICE_PORTS or parsed_origin.hostname not in {"127.0.0.1", "localhost"} or parsed_origin.path not in {"", "/"}:
@@ -325,8 +325,12 @@ class ApiBackend:
         response_content_type: str,
         decoded: LiveRouteResponse,
     ) -> None:
-        allowed = {"hawor.infer_tracks", "hawor_infiller.fill", "cosmos3.reason"}
-        if self.config.stage_capture_root is None or request.algorithm_id not in allowed:
+        default_allowed = {"hawor.infer_tracks", "hawor_infiller.fill", "cosmos3.reason"}
+        explicit_droid_finalize = (
+            request.algorithm_id == "droid.finalize"
+            and request.algorithm_id in self.config.stage_capture_limits
+        )
+        if self.config.stage_capture_root is None or (request.algorithm_id not in default_allowed and not explicit_droid_finalize):
             return
         stage_name = request.algorithm_id.replace(".", "_")
         with self._capture_lock:
@@ -726,6 +730,8 @@ class ApiBackend:
         required = ("T_world_camera", "T_camera_world", "disparities")
         if any(name not in decoded.parts for name in required):
             raise ApiProtocolError("DROID finalize camera_state is missing named binary pose/disparity parts")
+        response_mapping = result.get("keyframe_mapping") if isinstance(result, Mapping) else None
+        dense_mapping = result.get("dense_mapping") if isinstance(result, Mapping) else None
         def tensor(name: str, *, units: str, frame: str, order: str, tag: str) -> TypedTensor:
             part = decoded.parts.get(name)
             if not isinstance(part, DecodedPart):
@@ -740,14 +746,25 @@ class ApiBackend:
                 array = np.frombuffer(part.data, dtype=np.dtype(dtype)).reshape(tuple(int(dim) for dim in shape)).copy()
             except (TypeError, ValueError) as exc:
                 raise ApiProtocolError(f"DROID finalize part {name} has invalid tensor bytes") from exc
-            return TypedTensor(array, units=units, coordinate_frame=frame, tensor_index_order=order, semantic_tag=tag, provenance={"route": "droid.finalize", "field": name})
+            provenance = {"route": "droid.finalize", "field": name}
+            if response_mapping is not None:
+                provenance["keyframe_source_indices"] = response_mapping
+            if dense_mapping is not None:
+                provenance["dense_source_indices"] = dense_mapping
+            return TypedTensor(array, units=units, coordinate_frame=frame, tensor_index_order=order, semantic_tag=tag, provenance=provenance)
         session = self._sessions.get(request.input.session_id, {})
         K = np.asarray(session.get("K_droid_input", (1.0, 1.0, 0.0, 0.0)), dtype=np.float32)
         intrinsics = TypedTensor(K, units="pixels", coordinate_frame="droid_input", tensor_index_order="four", semantic_tag="droid_full_K_v1", provenance={"route": "droid.finalize"})
         caps = DroidCapabilities.frozen_3572551()
         diagnostic = bool(getattr(request.input, "allow_monocular_droid_smoke", False))
         keyframes = int(result.get("keyframe_mapping", result.get("keyframe_count", 0)) if isinstance(result.get("keyframe_mapping", result.get("keyframe_count", 0)), int) else len(result.get("keyframe_mapping", ())))
-        return DroidFinalizeOutput(request.input.ownership, request.input.session_id, tensor("T_world_camera", units="metres", frame="world_from_camera", order="tyx", tag="droid_T_world_camera_v1"), tensor("T_camera_world", units="metres", frame="camera_from_world", order="tyx", tag="droid_T_camera_world_v1"), intrinsics, tensor("disparities", units="inverse_metres", frame="droid_model", order="tyx", tag="droid_sensor_disparity_v1"), keyframes, "up_to_scale_monocular" if diagnostic else "metric_rgbd_unidepth", caps, acceptance=not diagnostic, diagnostic_only=diagnostic)
+        scale_mode = "up_to_scale_monocular" if diagnostic else "metric_rgbd_unidepth"
+        scale_provenance = {
+            "scale_source": "diagnostic_monocular_gauge" if diagnostic else "native_sensor_depth_plus_unidepth",
+            "convention": "T_world_camera maps camera homogeneous points into world; inverse is T_camera_world",
+            "route": "droid.finalize",
+        }
+        return DroidFinalizeOutput(request.input.ownership, request.input.session_id, tensor("T_world_camera", units="metres", frame="world_from_camera", order="tyx", tag="droid_T_world_camera_v1"), tensor("T_camera_world", units="metres", frame="camera_from_world", order="tyx", tag="droid_T_camera_world_v1"), intrinsics, tensor("disparities", units="inverse_metres", frame="droid_model", order="tyx", tag="droid_sensor_disparity_v1"), keyframes, scale_mode, caps, acceptance=not diagnostic, diagnostic_only=diagnostic, scale_provenance=scale_provenance)
 
     @staticmethod
     def classify_droid_failure(message: str, *, keyframe_count: int | None = None) -> str | None:

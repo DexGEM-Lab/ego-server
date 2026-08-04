@@ -49,8 +49,8 @@ DEFAULT_RAY_METRICS = {
 }
 RAY_QUEUE_FAMILY = "ray_serve_deployment_queued_queries"
 SNAPSHOT_NOT_DEPLOYED = "N/A snapshot not deployed"
-DROID_CAPACITY = 48
-DROID_LANE_CAPACITY = 8
+DROID_CAPACITY = 6
+DROID_LANE_CAPACITY = 1
 
 
 @dataclass(frozen=True)
@@ -400,7 +400,9 @@ def snapshot_lines(sources: Mapping[str, SourceResult], droid_db: SourceResult, 
             active = snap.get("active", {})
             capacity = snap.get("capacity", {})
             current = active.get("request_count") if isinstance(active, Mapping) else None
-            cap = capacity.get("max_batch_size") if isinstance(capacity, Mapping) else None
+            # Single-push DROID exposes resident sessions (max_sessions=1 per lane); the
+            # frame-count run-batch cap (max_batch_size=256) is not a session count.
+            cap = capacity.get("max_sessions", capacity.get("max_batch_size")) if isinstance(capacity, Mapping) else None
             terminal = snap.get("last_terminal")
             terminal_text = (
                 f"terminal ERR {terminal.get('error_type', 'UnknownError')}"

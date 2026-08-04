@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import types
-from dataclasses import MISSING, dataclass, fields, is_dataclass
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from enum import Enum
 from typing import Any, Mapping, Protocol, Sequence, TypeVar, Union, get_args, get_origin, get_type_hints
 
@@ -647,10 +647,32 @@ class DroidFinalizeOutput:
     capabilities: DroidCapabilities
     acceptance: bool = True
     diagnostic_only: bool = False
+    scale_provenance: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.T_world_camera.shape[-2:] != (4, 4) or self.T_camera_world.shape != self.T_world_camera.shape:
+        if self.T_world_camera.shape[-2:] != (4, 4) or self.T_camera_world.shape != self.T_world_camera.shape or self.T_world_camera.array.ndim != 3:
             raise TypedContractError("DROID poses must be [T,4,4] and inverse-shaped")
+        world = np.asarray(self.T_world_camera.array, dtype=np.float64)
+        camera = np.asarray(self.T_camera_world.array, dtype=np.float64)
+        valid_raw = self.T_world_camera.provenance.get("droid_pose_valid")
+        valid = np.asarray(valid_raw, dtype=bool) if valid_raw is not None else np.ones(world.shape[0], dtype=bool)
+        if valid.shape != (world.shape[0],):
+            raise TypedContractError("DROID pose validity must be [T]")
+        if np.any(~np.isfinite(world[valid])) or np.any(~np.isfinite(camera[valid])):
+            raise TypedContractError("valid DROID poses must contain finite values")
+        for index in np.flatnonzero(valid):
+            w, c = world[index], camera[index]
+            if not np.allclose(w[3], (0.0, 0.0, 0.0, 1.0), atol=2e-4) or not np.allclose(c[3], (0.0, 0.0, 0.0, 1.0), atol=2e-4):
+                raise TypedContractError("DROID poses must be homogeneous SE(3) transforms")
+            r = w[:3, :3]
+            if np.max(np.abs(r.T @ r - np.eye(3))) > 2e-4 or np.linalg.det(r) <= 0.0:
+                raise TypedContractError("DROID world pose rotation is not SO(3)")
+            if not np.allclose(w @ c, np.eye(4), atol=3e-4) or not np.allclose(c @ w, np.eye(4), atol=3e-4):
+                raise TypedContractError("DROID camera/world poses are not mutual inverses")
+        provenance = dict(self.scale_provenance)
+        if self.scale_mode == "metric_rgbd_unidepth" and not provenance.get("scale_source"):
+            raise TypedContractError("metric DROID output requires explicit scale_source provenance")
+        object.__setattr__(self, "scale_provenance", provenance)
         if self.intrinsics_px.shape != (4,):
             raise TypedContractError("DROID output must retain full [fx,fy,cx,cy]")
         if self.scale_mode not in {"metric_rgbd_unidepth", "up_to_scale_monocular"}:

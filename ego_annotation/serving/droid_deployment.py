@@ -34,6 +34,7 @@ from dataclasses import replace
 from typing import Any
 
 from ray import serve
+from ego_annotation.serving.queue_budget import queued_request_capacity
 from starlette.responses import StreamingResponse
 
 from ego_annotation.serving.binary_envelope import (
@@ -96,7 +97,7 @@ def _config_from_env() -> Any:
     num_replicas=1,
     ray_actor_options={"num_gpus": 1},
     max_ongoing_requests=32,
-    max_queued_requests=64,
+    max_queued_requests=queued_request_capacity("droid.infer"),
 )
 class DroidDeployment:
     def __init__(self) -> None:

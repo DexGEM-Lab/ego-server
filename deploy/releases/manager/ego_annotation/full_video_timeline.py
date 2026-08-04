@@ -12,6 +12,8 @@ import hashlib
 import json
 import math
 import os
+import subprocess
+import tempfile
 import threading
 import time
 from collections import OrderedDict
@@ -85,6 +87,20 @@ class StageConfigurationError(TimelineDriverError):
 
 class StageResultError(TimelineDriverError):
     """A backend changed typed identity, timeline, shape, or capability semantics."""
+
+
+# Each resident DROID session admits at most 256 selected-frame pushes. A
+# 64-frame exact source-ID overlap supplies enough motion for a baseline-checked
+# Sim(3) gauge join while keeping a 400-frame source at two sessions.
+DROID_SERVICE_PUSH_CAPACITY = 256
+DROID_SIM3_OVERLAP_FRAMES = 64
+DROID_SIM3_MIN_BASELINE = 1.0e-4
+DROID_SIM3_MAX_RELATIVE_SCALE = 1.0e4
+DROID_SIM3_MAX_NORMALIZED_TRANSLATION_RESIDUAL = 0.05
+DROID_SIM3_MAX_ROTATION_RESIDUAL_RAD = 0.10
+DEFAULT_HAWOR_ROOT = "/vePFS-Mindverse/user/yiwen/user-home/zjh/ego_annotation-master/third_party/HaWoR"
+DEFAULT_METRIC3D_CHECKPOINT = DEFAULT_HAWOR_ROOT + "/thirdparty/Metric3D/weights/metric_depth_vit_large_800k.pth"
+DEFAULT_METRIC3D_PYTHON = "/home/zjh/miniconda3/envs/hawor/bin/python"
 
 
 @dataclass(frozen=True)
@@ -595,8 +611,16 @@ class FullVideoDriverConfig:
     # An explicit model input shape is diagnostic-only. The default preserves
     # target-area resizing; a probe may compare one historical model geometry.
     droid_input_shape_yx: tuple[int, int] | None = None
-    # One pipeline DROID session admits at most 256 pushes. Configured DROID FPS
-    # schedules are split into promptly finalized, one-sample-overlap sessions.
+    # A resident DROID session accepts no more than 256 selected frames. Source-keyed
+    # sessions use a fixed 16-frame exact-ID overlap for a baseline-checked Sim(3) join.
+    droid_keyframe_buffer: int = DROID_SERVICE_PUSH_CAPACITY
+    droid_session_workers: int = 2
+    # Exact reference scalar path. Metric3D runs in its pinned HaWoR environment;
+    # UniDepth remains the wrist-depth/intrinsics source only.
+    droid_metric3d_hawor_root: str | None = DEFAULT_HAWOR_ROOT
+    droid_metric3d_checkpoint: str | None = DEFAULT_METRIC3D_CHECKPOINT
+    droid_metric3d_python: str = DEFAULT_METRIC3D_PYTHON
+    droid_metric3d_cuda_visible_devices: str = "1"
     lower_filter_retry_thresh: float | None = 1.2
     max_keyframe_retries: int = 1
     model_revisions: Mapping[str, str] = field(default_factory=lambda: {
@@ -625,6 +649,12 @@ class FullVideoDriverConfig:
             raise TimelineDriverError("select strict RGB-D or explicit diagnostic monocular mode")
         if self.droid_target_area_px <= 0:
             raise TimelineDriverError("DROID target area must be positive")
+        if self.droid_keyframe_buffer != DROID_SERVICE_PUSH_CAPACITY:
+            raise TimelineDriverError("DROID keyframe buffer is fixed to the 256-push service capacity")
+        if self.droid_session_workers <= 0:
+            raise TimelineDriverError("DROID session worker bound must be positive")
+        if not self.droid_metric3d_python.strip():
+            raise TimelineDriverError("Metric3D Python interpreter must be configured")
         if self.droid_input_shape_yx is not None and (
             len(self.droid_input_shape_yx) != 2
             or any(int(value) <= 0 or int(value) % 8 for value in self.droid_input_shape_yx)
@@ -1127,21 +1157,13 @@ class FullVideoAlgorithmState:
             raise TimelineDriverError("timeline-driver slice cannot write render/manifest paths")
 
 
-# The live service contract and the client chunk layout both require 256.
-DROID_SERVICE_PUSH_CAPACITY = 256
-
 
 @dataclass(frozen=True)
 class DroidCoverage:
-    """DROID coverage on the immutable source timeline.
-
-    Legacy runs expose a submitted prefix.  FPS-scheduled runs retain every
-    source-frame pose after interpolation while separately identifying actual
-    DROID samples and the overlapping service-session layout.
-    """
+    """DROID measurement coverage and the source-keyed <=256 session layout."""
 
     source_frame_count: int
-    submitted_count: int
+    submitted_count: int  # unique selected source frames
     pose_valid: tuple[bool, ...]
     pose_sampled: tuple[bool, ...] | None = None
     chunk_source_indices: tuple[tuple[int, ...], ...] = ()
@@ -1152,66 +1174,56 @@ class DroidCoverage:
             raise TimelineDriverError("DROID coverage must provide one validity value per source frame")
         sampled = self.pose_sampled
         if sampled is None:
-            if self.submitted_count <= 0 or self.submitted_count > DROID_SERVICE_PUSH_CAPACITY:
-                raise TimelineDriverError("DROID coverage submitted count violates the frozen service capacity")
-            expected = (True,) * self.submitted_count + (False,) * (self.source_frame_count - self.submitted_count)
-            if self.pose_valid != expected:
-                raise TimelineDriverError("DROID coverage must be an exact contiguous source prefix")
-            return
+            raise TimelineDriverError("DROID coverage requires an explicit source-keyed sampled mask")
         if len(sampled) != self.source_frame_count or not all(self.pose_valid):
-            raise TimelineDriverError("scheduled DROID coverage requires all-valid dense poses and N-frame sampled mask")
+            raise TimelineDriverError("DROID coverage requires all-valid dense poses and N-frame sampled mask")
         if self.submitted_count != sum(sampled) or self.submitted_count <= 0:
-            raise TimelineDriverError("scheduled DROID submitted count must equal sampled-mask count")
-        if not sampled[0] or not sampled[-1] or self.droid_fps is None or self.droid_fps <= 0:
-            raise TimelineDriverError("scheduled DROID coverage requires endpoint samples and positive target FPS")
+            raise TimelineDriverError("DROID coverage unique count must equal sampled-mask count")
+        if not sampled[0] or not sampled[-1] or (self.droid_fps is not None and self.droid_fps <= 0):
+            raise TimelineDriverError("DROID coverage requires endpoint source samples and a valid explicit target FPS")
+        if self.droid_fps is None and not all(sampled):
+            raise TimelineDriverError("droid_fps=None owns every source frame")
         if not self.chunk_source_indices or any(not chunk or len(chunk) > DROID_SERVICE_PUSH_CAPACITY for chunk in self.chunk_source_indices):
-            raise TimelineDriverError("scheduled DROID chunks must be nonempty and fit service capacity")
-        flattened = [index for chunk_index, chunk in enumerate(self.chunk_source_indices) for index in (chunk if chunk_index == 0 else chunk[1:])]
-        if tuple(flattened) != tuple(index for index, value in enumerate(sampled) if value):
-            raise TimelineDriverError("DROID chunks must stitch to the sampled source schedule")
-        if any(next_chunk[0] != chunk[-1] for chunk, next_chunk in zip(self.chunk_source_indices[:-1], self.chunk_source_indices[1:])):
-            raise TimelineDriverError("consecutive DROID chunks require a one-sample overlap")
+            raise TimelineDriverError("DROID sessions must be nonempty and admit at most 256 pushes")
+        flattened = tuple(index for n, chunk in enumerate(self.chunk_source_indices) for index in (chunk if n == 0 else chunk[DROID_SIM3_OVERLAP_FRAMES:]))
+        selected = tuple(index for index, value in enumerate(sampled) if value)
+        if flattened != selected:
+            raise TimelineDriverError("DROID sessions must preserve exact source keys with only canonical Sim(3) overlap")
+        for left, right in zip(self.chunk_source_indices, self.chunk_source_indices[1:]):
+            if len(left) < DROID_SIM3_OVERLAP_FRAMES or len(right) <= DROID_SIM3_OVERLAP_FRAMES or right[:DROID_SIM3_OVERLAP_FRAMES] != left[-DROID_SIM3_OVERLAP_FRAMES:]:
+                raise TimelineDriverError("consecutive DROID sessions require the fixed exact canonical Sim(3) overlap")
 
     @property
     def scheduled(self) -> bool:
-        return self.pose_sampled is not None
+        return True
 
     @property
     def partial(self) -> bool:
-        return not all(self.pose_valid)
+        return False
 
     @property
-    def unannotated_range(self) -> list[int] | None:
-        return [self.submitted_count, self.source_frame_count] if self.partial else None
+    def actual_pushed_count(self) -> int:
+        return sum(len(chunk) for chunk in self.chunk_source_indices)
 
     def to_wire(self) -> dict[str, object]:
-        if self.scheduled:
-            return {
-                "status": "completed_diagnostic_stitched_interpolated",
-                "reason": "diagnostic_stitched_interpolated",
-                "source_frame_count": self.source_frame_count,
-                "submitted_count": self.submitted_count,
-                "sampled_count": self.submitted_count,
-                "interpolated_count": self.source_frame_count - self.submitted_count,
-                "droid_fps": self.droid_fps,
-                "chunk_source_indices": [list(chunk) for chunk in self.chunk_source_indices],
-                "droid_pose_valid": list(self.pose_valid),
-                "droid_pose_sampled": list(self.pose_sampled),
-                "pose_validity": "per_frame_npz_mask; all true after endpoint-inclusive SE3 interpolation",
-                "pose_sampled": "per_frame manifest/NPZ mask; true only where DROID received a source frame",
-                "scale_mode": "up_to_scale_monocular",
-                "acceptance": False,
-            }
         return {
-            "status": "completed_with_partial_camera_coverage" if self.partial else "completed",
+            "status": "completed_source_keyed_session_dag",
+            "reason": "source_keyed_sessions_fixed_64_frame_overlap_then_sim3_merge",
             "source_frame_count": self.source_frame_count,
-            "submitted_count": self.submitted_count,
-            "covered_source_range": [0, self.submitted_count],
-            "unannotated_range": self.unannotated_range,
-            "unannotated_range_semantics": "[start_inclusive,end_exclusive)" if self.partial else None,
-            "reason": f"service_capacity_{DROID_SERVICE_PUSH_CAPACITY}_exceeded" if self.partial else None,
-            "warnings": [f"service_capacity_{DROID_SERVICE_PUSH_CAPACITY}_exceeded"] if self.partial else [],
-            "pose_validity": "per_frame_npz_mask; false means no DROID pose was submitted or inferred",
+            "effective_unique_coverage_count": self.submitted_count,
+            "actual_pushed_count": self.actual_pushed_count,
+            "overlap_push_count": self.actual_pushed_count - self.submitted_count,
+            "sampled_count": self.submitted_count,
+            "interpolated_count": self.source_frame_count - self.submitted_count,
+            "droid_fps": self.droid_fps,
+            "chunk_source_indices": [list(chunk) for chunk in self.chunk_source_indices],
+            "droid_pose_valid": list(self.pose_valid),
+            "droid_pose_sampled": list(self.pose_sampled or ()),
+            "pose_validity": "per-frame source-keyed mask; all true after endpoint-inclusive SE3 interpolation",
+            "pose_sampled": "per-frame source-keyed mask; true only where DROID received a source frame",
+            "session_policy": "at_most_256_pushes_fixed_64_frame_exact_source_overlap",
+            "scale_mode": "up_to_scale_monocular",
+            "acceptance": False,
         }
 
 
@@ -1420,11 +1432,10 @@ def _scheduled_droid_options(
 
 
 def _droid_prefix_coverage(frame_count: int) -> DroidCoverage:
-    return DroidCoverage(
-        source_frame_count=frame_count,
-        submitted_count=min(frame_count, DROID_SERVICE_PUSH_CAPACITY),
-        pose_valid=(True,) * min(frame_count, DROID_SERVICE_PUSH_CAPACITY) + (False,) * max(0, frame_count - DROID_SERVICE_PUSH_CAPACITY),
-    )
+    """Compatibility name for complete source-keyed session planning."""
+    indices = tuple(range(frame_count))
+    chunks = _droid_chunks_with_overlap(indices)
+    return DroidCoverage(frame_count, frame_count, (True,) * frame_count, (True,) * frame_count, chunks, None)
 
 
 def _droid_stride(source_fps: float, droid_fps: float) -> int:
@@ -1452,7 +1463,7 @@ def _droid_chunks_with_overlap(indices: Sequence[int]) -> tuple[tuple[int, ...],
         chunks.append(tuple(int(index) for index in indices[start:end]))
         if end == len(indices):
             break
-        start = end - 1
+        start = end - DROID_SIM3_OVERLAP_FRAMES
     return tuple(chunks)
 
 
@@ -1533,6 +1544,20 @@ def _unidepth_hand_depth_m(
     return None if not values.size else float(np.median(values))
 
 
+def _camera_points_to_world(points_camera: np.ndarray, T_world_camera: np.ndarray) -> np.ndarray:
+    """Apply the raw DROID world-from-camera convention once.
+
+    For row-wise points this is exactly ``P_cam @ R_c2w.T + t_c2w``;
+    translation-scale alignment must happen before this join and only on the
+    camera pose translation.
+    """
+    points = np.asarray(points_camera, dtype=np.float32)
+    transform = np.asarray(T_world_camera, dtype=np.float32)
+    if points.shape[-1] != 3 or transform.shape != (4, 4) or not np.isfinite(transform).all():
+        raise StageResultError("world hand transform requires finite points[...,3] and T_world_camera[4,4]")
+    return np.ascontiguousarray(points @ transform[:3, :3].T + transform[:3, 3])
+
+
 def _metric_wilor_geometry(
     vertices_root: np.ndarray,
     joints_root: np.ndarray,
@@ -1571,53 +1596,6 @@ def _densify_droid_tensor(tensor: TypedTensor, source_indices: tuple[int, ...], 
     provenance.update({"sampling": "nearest_source_frame_fill", "measured_source_frame_indices": list(source_indices), "inferred_full_timeline": True})
     return TypedTensor(dense, tensor.units, tensor.coordinate_frame, tensor.tensor_index_order, tensor.semantic_tag, provenance, tensor.pixel_transform)
 
-
-def _densify_droid_output(output: DroidFinalizeOutput, timeline: SourceTimeline, source_indices: tuple[int, ...]) -> DroidFinalizeOutput:
-    """Place legacy service poses only at submitted source indices; never infer missing tail poses."""
-    frame_count = timeline.frame_count
-    source_count = len(source_indices)
-    if source_indices != tuple(range(source_count)):
-        raise StageResultError("DROID service input must be the exact source prefix")
-    pose_count = int(output.T_world_camera.shape[0])
-    if pose_count != source_count:
-        raise StageResultError(f"DROID finalize returned {pose_count} frames for a {source_count}-frame submitted schedule")
-    coverage = _droid_prefix_coverage(frame_count)
-    world_array = np.full((frame_count, 4, 4), np.nan, dtype=np.float32)
-    world_array[:source_count] = np.asarray(output.T_world_camera.array, dtype=np.float32)
-    camera_array = np.full((frame_count, 4, 4), np.nan, dtype=np.float32)
-    camera_array[:source_count] = np.linalg.inv(world_array[:source_count]).astype(np.float32)
-    coverage_provenance = {
-        "tail_policy": "exact_submitted_source_prefix_no_tail_inference",
-        "droid_pose_valid": list(coverage.pose_valid),
-        "source_frame_count": coverage.source_frame_count,
-        "submitted_count": coverage.submitted_count,
-        "unannotated_range": coverage.unannotated_range,
-        "reason": f"service_capacity_{DROID_SERVICE_PUSH_CAPACITY}_exceeded" if coverage.partial else None,
-    }
-    world = TypedTensor(world_array, output.T_world_camera.units, output.T_world_camera.coordinate_frame, output.T_world_camera.tensor_index_order, output.T_world_camera.semantic_tag, {**dict(output.T_world_camera.provenance), **coverage_provenance}, output.T_world_camera.pixel_transform)
-    camera = TypedTensor(camera_array, output.T_camera_world.units, output.T_camera_world.coordinate_frame, output.T_camera_world.tensor_index_order, output.T_camera_world.semantic_tag, {**dict(output.T_camera_world.provenance), **coverage_provenance}, output.T_camera_world.pixel_transform)
-    disparities = TypedTensor(
-        np.ascontiguousarray(output.disparities.array),
-        output.disparities.units,
-        output.disparities.coordinate_frame,
-        output.disparities.tensor_index_order,
-        output.disparities.semantic_tag,
-        {**dict(output.disparities.provenance), "sampling": "service_native_keyframe_tensor_preserved", "submitted_source_frame_indices": list(source_indices), **coverage_provenance},
-        output.disparities.pixel_transform,
-    )
-    return DroidFinalizeOutput(
-        ownership=output.ownership,
-        session_id=output.session_id,
-        T_world_camera=world,
-        T_camera_world=camera,
-        intrinsics_px=output.intrinsics_px,
-        disparities=disparities,
-        keyframe_count=output.keyframe_count,
-        scale_mode=output.scale_mode,
-        capabilities=output.capabilities,
-        acceptance=output.acceptance,
-        diagnostic_only=output.diagnostic_only,
-    )
 
 
 def _rotation_to_quaternion(rotation: np.ndarray) -> np.ndarray:
@@ -1676,28 +1654,6 @@ def _rotation_distance_rad(left: np.ndarray, right: np.ndarray) -> float:
     return float(math.acos(max(-1.0, min(1.0, (float(np.trace(relative)) - 1.0) / 2.0))))
 
 
-def _stitch_droid_chunk_poses(chunk_poses: Sequence[np.ndarray]) -> tuple[np.ndarray, tuple[tuple[float, float], ...]]:
-    """Rigidly align local chunk worlds at their one-frame overlaps; no scale fit."""
-    if not chunk_poses:
-        raise StageResultError("DROID stitching requires at least one chunk")
-    stitched: list[np.ndarray] = []
-    continuity: list[tuple[float, float]] = []
-    for chunk_index, raw_chunk in enumerate(chunk_poses):
-        chunk = np.asarray(raw_chunk, dtype=np.float64)
-        if chunk.ndim != 3 or chunk.shape[1:] != (4, 4) or not np.isfinite(chunk).all():
-            raise StageResultError("DROID chunk poses must be finite [N,4,4]")
-        if chunk_index == 0:
-            stitched.extend(chunk)
-            continue
-        previous_last = stitched[-1]
-        transform = previous_last @ np.linalg.inv(chunk[0])
-        aligned = np.einsum("ij,njk->nik", transform, chunk)
-        translation_error = float(np.linalg.norm(aligned[0, :3, 3] - previous_last[:3, 3]))
-        rotation_error = _rotation_distance_rad(aligned[0, :3, :3], previous_last[:3, :3])
-        continuity.append((translation_error, rotation_error))
-        stitched.extend(aligned[1:])
-    return np.asarray(stitched, dtype=np.float32), tuple(continuity)
-
 
 def _interpolate_droid_poses(sampled_indices: Sequence[int], sampled_poses: np.ndarray, frame_count: int) -> tuple[np.ndarray, np.ndarray]:
     indices = tuple(int(index) for index in sampled_indices)
@@ -1708,6 +1664,8 @@ def _interpolate_droid_poses(sampled_indices: Sequence[int], sampled_poses: np.n
         raise StageResultError("DROID sampled poses do not match sampled source schedule")
     dense = np.empty((frame_count, 4, 4), dtype=np.float32)
     sampled_mask = np.zeros(frame_count, dtype=bool)
+    if len(indices) == 1:
+        dense[0] = poses[0].astype(np.float32)
     for left_slot, (left_index, right_index) in enumerate(zip(indices[:-1], indices[1:])):
         left, right = poses[left_slot], poses[left_slot + 1]
         for frame_index in range(left_index, right_index + 1):
@@ -1722,24 +1680,6 @@ def _interpolate_droid_poses(sampled_indices: Sequence[int], sampled_poses: np.n
     return dense, sampled_mask
 
 
-def _densify_stitched_droid_output(output: DroidFinalizeOutput, timeline: SourceTimeline, coverage: DroidCoverage, stitched_sampled_poses: np.ndarray) -> DroidFinalizeOutput:
-    if not coverage.scheduled or coverage.pose_sampled is None:
-        raise StageResultError("stitched DROID densification requires scheduled coverage")
-    sampled_indices = tuple(index for index, sampled in enumerate(coverage.pose_sampled) if sampled)
-    world_array, sampled_mask = _interpolate_droid_poses(sampled_indices, stitched_sampled_poses, timeline.frame_count)
-    camera_array = np.linalg.inv(world_array).astype(np.float32)
-    provenance = {
-        "sampling": "uniform_downsample_endpoint_inclusive_then_se3_slerp_linear_interpolation",
-        "measured_source_frame_indices": list(sampled_indices),
-        "droid_pose_valid": [True] * timeline.frame_count,
-        "droid_pose_sampled": sampled_mask.tolist(),
-        "droid_chunk_source_indices": [list(chunk) for chunk in coverage.chunk_source_indices],
-        "scale_mode": "up_to_scale_monocular",
-        "acceptance": False,
-    }
-    def dense_tensor(tensor: TypedTensor, array: np.ndarray) -> TypedTensor:
-        return TypedTensor(array, tensor.units, tensor.coordinate_frame, tensor.tensor_index_order, tensor.semantic_tag, {**dict(tensor.provenance), **provenance}, tensor.pixel_transform)
-    return DroidFinalizeOutput(output.ownership, output.session_id, dense_tensor(output.T_world_camera, world_array), dense_tensor(output.T_camera_world, camera_array), output.intrinsics_px, TypedTensor(np.ascontiguousarray(output.disparities.array), output.disparities.units, output.disparities.coordinate_frame, output.disparities.tensor_index_order, output.disparities.semantic_tag, {**dict(output.disparities.provenance), **provenance}, output.disparities.pixel_transform), output.keyframe_count, "up_to_scale_monocular", output.capabilities, acceptance=False, diagnostic_only=True)
 
 
 class _TimingClientProxy:
@@ -1749,6 +1689,598 @@ class _TimingClientProxy:
 
     def execute(self, request: AlgorithmRequest[Any]) -> AlgorithmResult[Any]:
         return self._driver._execute_timed(request)
+
+
+
+
+def _droid_temporal_qc(world: np.ndarray, valid: np.ndarray) -> Mapping[str, object]:
+    finite_indices = [int(i) for i in np.flatnonzero(valid)]
+    if len(finite_indices) < 2:
+        return {"status": "insufficient_valid_pairs", "max_one_step_rotation_rad": None}
+
+    def rotation_distance(left: np.ndarray, right: np.ndarray) -> float:
+        relative = left.T @ right
+        cosine = max(-1.0, min(1.0, (float(np.trace(relative)) - 1.0) / 2.0))
+        return float(math.acos(cosine))
+
+    one_step: list[float] = []
+    consecutive_indices: list[int] = []
+    for left, right in zip(finite_indices[:-1], finite_indices[1:]):
+        if right != left + 1:
+            continue
+        consecutive_indices.append(left)
+        one_step.append(rotation_distance(world[left, :3, :3], world[right, :3, :3]))
+    maximum = max(one_step) if one_step else None
+    if maximum is not None and maximum > 1.0:
+        raise StageResultError(
+            f"DROID temporal QC rejected physically impossible source-frame rotation {maximum:.6f} rad"
+        )
+    parity_run = longest_run = 0
+    for frame_index in range(len(world) - 2):
+        if not (valid[frame_index] and valid[frame_index + 1] and valid[frame_index + 2]):
+            parity_run = 0
+            continue
+        first = rotation_distance(world[frame_index, :3, :3], world[frame_index + 1, :3, :3])
+        second = rotation_distance(world[frame_index + 1, :3, :3], world[frame_index + 2, :3, :3])
+        two_step = rotation_distance(world[frame_index, :3, :3], world[frame_index + 2, :3, :3])
+        if first > 0.20 and second > 0.20 and two_step < 0.10:
+            parity_run += 1
+            longest_run = max(longest_run, parity_run)
+        else:
+            parity_run = 0
+    if longest_run >= 4:
+        raise StageResultError(
+            f"DROID temporal QC rejected sustained parity-interleaved trajectory run={longest_run}"
+        )
+    return {
+        "status": "passed",
+        "max_one_step_rotation_rad": maximum,
+        "valid_pair_count": len(one_step),
+        "longest_parity_return_run": longest_run,
+    }
+
+def _droid_keyframe_source_indices(output: DroidFinalizeOutput, selected: tuple[int, ...]) -> tuple[int, ...] | None:
+    """Decode service mapping records or numeric string IDs without offset guesses."""
+    count = int(output.disparities.shape[0])
+    for provenance in (output.disparities.provenance, output.T_world_camera.provenance, output.scale_provenance):
+        for key in ("keyframe_mapping", "keyframe_source_indices", "keyframe_frame_indices", "source_frame_indices"):
+            mapping = _mapping_source_indices(provenance.get(key), expected_count=count, allowed=selected)
+            if mapping is not None:
+                return mapping
+    return None
+
+
+def _estimate_metric3d_droid_scale(
+    output: DroidFinalizeOutput,
+    timeline: SourceTimeline,
+    selected: tuple[int, ...],
+    dynamic_masks: Mapping[int, np.ndarray],
+    source: FrameSource,
+    canonical_k: np.ndarray,
+    *,
+    hawor_root: str | None,
+    metric_checkpoint: str | None,
+    metric3d_python: str,
+    cuda_visible_devices: str,
+) -> tuple[float, Mapping[str, object]]:
+    if not hawor_root or not metric_checkpoint:
+        raise StageResultError("Metric3D DROID scale paths are not configured")
+    keyframes = _droid_keyframe_source_indices(output, selected)
+    if keyframes is None:
+        raise StageResultError("Metric3D DROID scale requires keyframe_mapping source_frame_id rows")
+    try:
+        import cv2
+    except Exception as exc:
+        raise StageResultError(f"Metric3D bridge requires OpenCV: {type(exc).__name__}: {exc}") from exc
+    helper = Path(__file__).resolve().parents[1] / "scripts" / "estimate_droid_metric3d_scale_bridge.py"
+    if not helper.is_file() or not Path(metric3d_python).is_file():
+        raise StageResultError("Metric3D bridge script or pinned interpreter is unavailable")
+    with tempfile.TemporaryDirectory(prefix="manager-droid-metric3d-") as temp:
+        root = Path(temp)
+        image_dir = root / "images"
+        image_dir.mkdir()
+        for frame_index in timeline.frame_indices:
+            path = image_dir / f"{frame_index:08d}.jpg"
+            rgb = np.asarray(source.read_rgb(frame_index), dtype=np.uint8)
+            if not cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)):
+                raise StageResultError(f"Metric3D could not materialize source frame {frame_index}")
+        # Both the reference estimator and DROID BA use positive=dynamic/ignore.
+        dynamic_ignore_masks = np.zeros((timeline.frame_count, *next(iter(dynamic_masks.values())).shape), dtype=np.uint8)
+        for frame_index, mask in dynamic_masks.items():
+            dynamic_ignore_masks[int(frame_index)] = np.asarray(mask, dtype=np.uint8)
+        geometry_path = root / "geometry.npz"
+        masks_path = root / "dynamic_masks.npy"
+        calib_path = root / "calib.npy"
+        output_path = root / "scale.json"
+        np.savez_compressed(
+            geometry_path,
+            frame_idx=np.arange(timeline.frame_count, dtype=np.int32),
+            tstamp=np.asarray(keyframes, dtype=np.int32),
+            disps=np.asarray(output.disparities.array, dtype=np.float32),
+        )
+        np.save(masks_path, dynamic_ignore_masks, allow_pickle=False)
+        K = np.asarray(canonical_k, dtype=np.float32)
+        np.save(calib_path, np.asarray([K[0, 0], K[1, 1], K[0, 2], K[1, 2]], dtype=np.float32), allow_pickle=False)
+        command = [
+            metric3d_python, str(helper), "--geometry", str(geometry_path),
+            "--image-dir", str(image_dir), "--masks", str(masks_path),
+            "--calib", str(calib_path), "--hawor-root", hawor_root,
+            "--metric-checkpoint", metric_checkpoint, "--output", str(output_path),
+        ]
+        environment = dict(os.environ)
+        environment["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
+        completed = subprocess.run(command, cwd=str(helper.parents[1]), env=environment, capture_output=True, text=True)
+        if completed.returncode != 0 or not output_path.is_file():
+            detail = (completed.stderr or completed.stdout or "Metric3D bridge failed")[-4000:]
+            raise StageResultError(f"Metric3D DROID scale estimation failed: {detail}")
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    scalar = float(payload["scale"])
+    if not np.isfinite(scalar) or scalar <= 0:
+        raise StageResultError("Metric3D DROID scale must be finite and positive")
+    report = dict(payload["report"])
+    report["bridge_python"] = metric3d_python
+    report["cuda_visible_devices"] = cuda_visible_devices
+    report["mask_semantics"] = "positive=dynamic_ignore"
+    return scalar, report
+
+
+def _estimate_metric3d_droid_scales(
+    outputs: Sequence[DroidFinalizeOutput],
+    chunks: Sequence[tuple[int, ...]],
+    timeline: SourceTimeline,
+    dynamic_masks: Mapping[int, np.ndarray],
+    source: FrameSource,
+    canonical_k: np.ndarray,
+    *,
+    hawor_root: str | None,
+    metric_checkpoint: str | None,
+    metric3d_python: str,
+    cuda_visible_devices: str,
+) -> tuple[tuple[float, ...], tuple[Mapping[str, object], ...]]:
+    """Estimate all session scales in one shared Metric3D depth pass.
+
+    The bridge receives each session's exact keyframe mapping, but source RGB
+    frames, dynamic masks, Metric3D construction, and Metric3D depth inference
+    occur once for the video.  A failure is terminal: falling back to one
+    subprocess per session would silently reintroduce the long-video cost this
+    path exists to avoid.
+    """
+    if len(outputs) != len(chunks) or not outputs:
+        raise StageResultError("Metric3D DROID session output/chunk cardinality is invalid")
+    if not hawor_root or not metric_checkpoint:
+        raise StageResultError("Metric3D DROID scale paths are not configured")
+    session_geometries: list[tuple[tuple[int, ...], np.ndarray]] = []
+    for session_index, (output, chunk) in enumerate(zip(outputs, chunks)):
+        keyframes = _droid_keyframe_source_indices(output, chunk)
+        disparities = np.asarray(output.disparities.array, dtype=np.float32)
+        if keyframes is None or disparities.shape[0] != len(keyframes) or not np.isfinite(disparities).all():
+            raise StageResultError(f"DROID session {session_index} lacks valid exact keyframe Metric3D evidence")
+        session_geometries.append((keyframes, disparities))
+    try:
+        import cv2
+    except Exception as exc:
+        raise StageResultError(f"Metric3D bridge requires OpenCV: {type(exc).__name__}: {exc}") from exc
+    helper = Path(__file__).resolve().parents[1] / "scripts" / "estimate_droid_metric3d_scale_bridge.py"
+    if not helper.is_file() or not Path(metric3d_python).is_file():
+        raise StageResultError("Metric3D bridge script or pinned interpreter is unavailable")
+    if not set(dynamic_masks).issubset(set(timeline.frame_indices)) or not dynamic_masks:
+        raise StageResultError("Metric3D DROID scales require source-keyed dynamic masks")
+    with tempfile.TemporaryDirectory(prefix="manager-droid-metric3d-multi-") as temp:
+        root = Path(temp)
+        image_dir = root / "images"
+        image_dir.mkdir()
+        for frame_index in timeline.frame_indices:
+            path = image_dir / f"{frame_index:08d}.jpg"
+            rgb = np.asarray(source.read_rgb(frame_index), dtype=np.uint8)
+            if not cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)):
+                raise StageResultError(f"Metric3D could not materialize source frame {frame_index}")
+        mask_shape = np.asarray(next(iter(dynamic_masks.values()))).shape
+        dynamic_ignore_masks = np.zeros((timeline.frame_count, *mask_shape), dtype=np.uint8)
+        for frame_index, mask in dynamic_masks.items():
+            value = np.asarray(mask, dtype=np.uint8)
+            if value.shape != mask_shape:
+                raise StageResultError("Metric3D DROID dynamic masks have inconsistent source grids")
+            dynamic_ignore_masks[int(frame_index)] = value
+        if not np.isfinite(dynamic_ignore_masks).all() or not np.all((dynamic_ignore_masks == 0) | (dynamic_ignore_masks == 1)):
+            raise StageResultError("Metric3D DROID dynamic masks must be finite binary positive=dynamic_ignore")
+        geometry_path = root / "multi_geometry.npz"
+        geometry_payload: dict[str, np.ndarray] = {
+            "frame_idx": np.asarray(timeline.frame_indices, dtype=np.int32),
+            "session_count": np.asarray(len(session_geometries), dtype=np.int32),
+        }
+        for session_index, (keyframes, disparities) in enumerate(session_geometries):
+            geometry_payload[f"session_{session_index}_tstamp"] = np.asarray(keyframes, dtype=np.int32)
+            geometry_payload[f"session_{session_index}_disps"] = disparities
+        masks_path = root / "dynamic_masks.npy"
+        calib_path = root / "calib.npy"
+        output_path = root / "scales.json"
+        np.savez_compressed(geometry_path, **geometry_payload)
+        np.save(masks_path, dynamic_ignore_masks, allow_pickle=False)
+        K = np.asarray(canonical_k, dtype=np.float32)
+        np.save(calib_path, np.asarray([K[0, 0], K[1, 1], K[0, 2], K[1, 2]], dtype=np.float32), allow_pickle=False)
+        command = [
+            metric3d_python, str(helper), "--multi-geometry", str(geometry_path),
+            "--image-dir", str(image_dir), "--masks", str(masks_path),
+            "--calib", str(calib_path), "--hawor-root", hawor_root,
+            "--metric-checkpoint", metric_checkpoint, "--output", str(output_path),
+        ]
+        environment = dict(os.environ)
+        environment["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
+        completed = subprocess.run(command, cwd=str(helper.parents[1]), env=environment, capture_output=True, text=True)
+        if completed.returncode != 0 or not output_path.is_file():
+            detail = (completed.stderr or completed.stdout or "Metric3D multi-session bridge failed")[-4000:]
+            raise StageResultError(f"Metric3D DROID multi-session scale estimation failed: {detail}")
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    rows = payload.get("sessions") if isinstance(payload, Mapping) else None
+    if not isinstance(rows, list) or len(rows) != len(outputs):
+        raise StageResultError("Metric3D DROID multi-session bridge returned invalid session cardinality")
+    shared = payload.get("shared_metric3d") if isinstance(payload, Mapping) else None
+    if not isinstance(shared, Mapping) or shared.get("metric_model_load_count") != 1 or shared.get("metric_depth_pass_count") != timeline.frame_count:
+        raise StageResultError("Metric3D DROID multi-session bridge did not attest one shared model/depth pass")
+    scales: list[float] = []
+    reports: list[Mapping[str, object]] = []
+    for session_index, (row, (keyframes, _)) in enumerate(zip(rows, session_geometries)):
+        if not isinstance(row, Mapping) or not isinstance(row.get("report"), Mapping):
+            raise StageResultError(f"Metric3D DROID session {session_index} returned malformed evidence")
+        scalar = float(row.get("scale", float("nan")))
+        report = dict(row["report"])
+        if not np.isfinite(scalar) or scalar <= 0 or report.get("exact_keyframe_source_ids") != list(keyframes):
+            raise StageResultError(f"Metric3D DROID session {session_index} returned invalid scale or keyframe mapping")
+        report.update({
+            "bridge_python": metric3d_python,
+            "cuda_visible_devices": cuda_visible_devices,
+            "mask_semantics": "positive=dynamic_ignore",
+            "shared_metric3d": dict(shared),
+        })
+        scales.append(scalar)
+        reports.append(report)
+    return tuple(scales), tuple(reports)
+
+
+def _scale_droid_output_once(
+    output: DroidFinalizeOutput,
+    timeline: SourceTimeline,
+    selected: tuple[int, ...],
+    dynamic_masks: Mapping[int, np.ndarray],
+    source: FrameSource,
+    canonical_k: np.ndarray,
+    *,
+    hawor_root: str | None,
+    metric_checkpoint: str | None,
+    metric3d_python: str,
+    cuda_visible_devices: str,
+    metric_scalar: float | None = None,
+    metric_report: Mapping[str, object] | None = None,
+) -> DroidFinalizeOutput:
+    if output.scale_provenance.get("translation_scale_applied"):
+        return output
+    if metric_scalar is None:
+        scalar, report = _estimate_metric3d_droid_scale(
+            output, timeline, selected, dynamic_masks, source, canonical_k,
+            hawor_root=hawor_root, metric_checkpoint=metric_checkpoint,
+            metric3d_python=metric3d_python, cuda_visible_devices=cuda_visible_devices,
+        )
+    else:
+        scalar = float(metric_scalar)
+        report = dict(metric_report or {})
+        if not np.isfinite(scalar) or scalar <= 0:
+            raise StageResultError("precomputed Metric3D DROID scale must be finite and positive")
+    world = np.asarray(output.T_world_camera.array, dtype=np.float32).copy()
+    valid_world = np.isfinite(world).all(axis=(1, 2))
+    world[valid_world, :3, 3] *= np.float32(scalar)
+    camera = np.full_like(world, np.nan)
+    for frame_index in np.flatnonzero(valid_world):
+        camera[frame_index] = np.linalg.inv(world[frame_index]).astype(np.float32)
+    provenance = {
+        **dict(output.scale_provenance), "translation_scale_applied": True,
+        "scale_source": "Metric3D_est_scale_hybrid", "scale": scalar,
+        "scale_provenance": "droid_local_world_scaled_by_metric3d_scalar",
+        "scale_report": dict(report), "scale_applied_to": "translation_only_once",
+    }
+    def dt(t: TypedTensor, arr: np.ndarray) -> TypedTensor:
+        return TypedTensor(arr, t.units, t.coordinate_frame, t.tensor_index_order, t.semantic_tag, {**dict(t.provenance), **provenance}, t.pixel_transform)
+    return replace(output, T_world_camera=dt(output.T_world_camera, world), T_camera_world=dt(output.T_camera_world, camera), scale_provenance=provenance)
+
+
+def _mapping_source_indices(raw: object, *, expected_count: int, allowed: Sequence[int]) -> tuple[int, ...] | None:
+    """Parse service mapping records or string IDs without inferring slot offsets."""
+    if not isinstance(raw, (list, tuple)) or len(raw) != expected_count:
+        return None
+    values: list[int] = []
+    for row in raw:
+        value = (row.get("source_frame_id", row.get("source_frame_index")) if isinstance(row, Mapping) else row)
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            # Services may return either a numeric canonical ID or the exact
+            # SourceFrame ``<source>:frame:<zero-padded-index>`` string.
+            if ":frame:" in text:
+                _, _, text = text.rpartition(":frame:")
+            if not text or not text.isdecimal():
+                return None
+            parsed = int(text)
+        elif isinstance(value, (int, np.integer)):
+            parsed = int(value)
+        else:
+            return None
+        values.append(parsed)
+    result = tuple(values)
+    return result if tuple(sorted(set(result))) == result and all(value in allowed for value in result) else None
+
+
+def _droid_pose_source_indices(output: DroidFinalizeOutput, expected: tuple[int, ...]) -> tuple[int, ...] | None:
+    pose_count = int(output.T_world_camera.shape[0])
+    for provenance in (output.T_world_camera.provenance, output.T_camera_world.provenance, output.scale_provenance):
+        for key in ("dense_mapping", "dense_source_indices", "pose_mapping", "pose_source_indices", "keyframe_mapping", "keyframe_source_indices"):
+            mapping = _mapping_source_indices(provenance.get(key), expected_count=pose_count, allowed=expected)
+            if mapping is not None:
+                return mapping
+    return None
+
+
+def _validate_rigid_pose_array(poses: np.ndarray, *, label: str) -> np.ndarray:
+    array = np.asarray(poses, dtype=np.float64)
+    if array.ndim != 3 or array.shape[1:] != (4, 4) or not np.isfinite(array).all():
+        raise StageResultError(f"{label} poses must be finite [N,4,4]")
+    if not np.allclose(array[:, 3, :], np.asarray([0.0, 0.0, 0.0, 1.0]), atol=1e-5, rtol=0.0):
+        raise StageResultError(f"{label} poses have invalid homogeneous row")
+    for rotation in array[:, :3, :3]:
+        if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-4, rtol=0.0) or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-4, rtol=0.0):
+            raise StageResultError(f"{label} poses contain non-SO(3) rotation")
+    return array
+
+
+def _anchor_stitch_drift_diagnostics(
+    global_poses: Mapping[int, np.ndarray],
+    local_poses: Mapping[int, np.ndarray],
+    overlap: tuple[int, ...],
+    *,
+    anchor_source_id: int,
+    session_index: int,
+) -> tuple[np.ndarray, np.ndarray, Mapping[str, object]]:
+    """Rigidly align at one exact anchor and measure, never fit, overlap drift."""
+    if anchor_source_id not in global_poses or anchor_source_id not in local_poses:
+        raise StageResultError(f"DROID session {session_index} anchor source ID is unavailable")
+    anchor_global, anchor_local = global_poses[anchor_source_id], local_poses[anchor_source_id]
+    rotation = anchor_global[:3, :3] @ anchor_local[:3, :3].T
+    translation = anchor_global[:3, 3] - rotation @ anchor_local[:3, 3]
+    if not np.isfinite(rotation).all() or not np.isfinite(translation).all():
+        raise StageResultError(f"DROID session {session_index} anchor transform is nonfinite")
+    global_centers = np.stack([global_poses[key][:3, 3] for key in overlap]).astype(np.float64)
+    local_centers = np.stack([local_poses[key][:3, 3] for key in overlap]).astype(np.float64)
+    pairs = [(left, right) for left in range(len(overlap)) for right in range(left + 1, len(overlap))]
+    local_distances = np.asarray([np.linalg.norm(local_centers[right] - local_centers[left]) for left, right in pairs])
+    global_distances = np.asarray([np.linalg.norm(global_centers[right] - global_centers[left]) for left, right in pairs])
+    usable = (local_distances > DROID_SIM3_MIN_BASELINE) & (global_distances > DROID_SIM3_MIN_BASELINE)
+    if int(np.count_nonzero(usable)) < 2:
+        raise StageResultError(f"DROID session {session_index} anchor overlap has degenerate camera-center baseline")
+    local_baseline = float(np.median(local_distances[usable]))
+    global_baseline = float(np.median(global_distances[usable]))
+    predicted_centers = (rotation @ local_centers.T).T + translation
+    translation_errors = np.linalg.norm(predicted_centers - global_centers, axis=1)
+    aligned_rotations = np.einsum("ij,njk->nik", rotation, np.stack([local_poses[key][:3, :3] for key in overlap]))
+    rotation_errors = np.asarray([_rotation_distance_rad(aligned, global_poses[key][:3, :3]) for aligned, key in zip(aligned_rotations, overlap)])
+    held_indices = [index for index, key in enumerate(overlap) if key != anchor_source_id]
+    held_translation = translation_errors[held_indices]
+    held_rotation = rotation_errors[held_indices]
+    endpoint_global = global_centers[-1] - global_centers[0]
+    endpoint_local = local_centers[-1] - local_centers[0]
+    local_norm, global_norm = float(np.linalg.norm(endpoint_local)), float(np.linalg.norm(endpoint_global))
+    angle = None
+    if local_norm > DROID_SIM3_MIN_BASELINE and global_norm > DROID_SIM3_MIN_BASELINE:
+        cosine = float(np.dot(endpoint_local, endpoint_global) / (local_norm * global_norm))
+        angle = float(math.acos(max(-1.0, min(1.0, cosine))))
+    return rotation, translation, {
+        "alignment_method": "exact_final_overlap_anchor_rigid",
+        "boundary_source_frame_ids": list(overlap),
+        "anchor_source_frame_id": anchor_source_id,
+        "overlap_local_baseline": local_baseline,
+        "overlap_global_baseline": global_baseline,
+        "translation_residual_m": float(np.max(translation_errors)),
+        "translation_residual_rms_m": float(np.sqrt(np.mean(translation_errors * translation_errors))),
+        "translation_residual_normalized": float(np.max(translation_errors) / global_baseline),
+        "rotation_residual_rad": float(np.max(rotation_errors)),
+        "overlap_endpoint_residuals": {
+            "first_source_frame_id": overlap[0],
+            "first_translation_residual_m": float(translation_errors[0]),
+            "first_rotation_residual_rad": float(rotation_errors[0]),
+            "anchor_source_frame_id": anchor_source_id,
+            "anchor_translation_residual_m": float(translation_errors[-1]),
+            "anchor_rotation_residual_rad": float(rotation_errors[-1]),
+            "local_endpoint_displacement_m": local_norm,
+            "global_endpoint_displacement_m": global_norm,
+            "global_to_local_endpoint_ratio": None if local_norm <= DROID_SIM3_MIN_BASELINE else global_norm / local_norm,
+            "endpoint_displacement_angle_rad": angle,
+        },
+        "held_out_overlap_drift": {
+            "source_frame_ids": [overlap[index] for index in held_indices],
+            "translation_max_m": float(np.max(held_translation)),
+            "translation_rms_m": float(np.sqrt(np.mean(held_translation * held_translation))),
+            "translation_normalized": float(np.max(held_translation) / global_baseline),
+            "rotation_max_rad": float(np.max(held_rotation)),
+        },
+    }
+
+
+def _validate_anchor_seam(
+    merged: Mapping[int, np.ndarray],
+    aligned_successor: Mapping[int, np.ndarray],
+    *,
+    anchor_source_id: int,
+    first_unique_source_id: int,
+    session_index: int,
+) -> Mapping[str, object]:
+    """Reject an impossible immediate rigid seam before timeline interpolation."""
+    anchor, successor = merged[anchor_source_id], aligned_successor[first_unique_source_id]
+    rotation = _rotation_distance_rad(anchor[:3, :3], successor[:3, :3])
+    if not np.isfinite(rotation) or rotation > 1.0:
+        raise StageResultError(
+            f"DROID session {session_index} anchor stitch rejected impossible seam one-step rotation {rotation:.6f} rad"
+        )
+    return {
+        "anchor_source_frame_id": anchor_source_id,
+        "first_unique_source_frame_id": first_unique_source_id,
+        "one_step_rotation_rad": rotation,
+    }
+
+
+def _merge_source_keyed_droid_sessions(
+    session_outputs: Sequence[DroidFinalizeOutput],
+    chunks: Sequence[tuple[int, ...]],
+) -> tuple[dict[int, np.ndarray], tuple[Mapping[str, object], ...], tuple[tuple[int, ...], ...]]:
+    """Anchor-stitch per-session Metric3D-normalized poses by exact source key."""
+    if len(session_outputs) != len(chunks) or not chunks:
+        raise StageResultError("DROID session output/chunk cardinality is invalid")
+    merged: dict[int, np.ndarray] = {}
+    reports: list[Mapping[str, object]] = []
+    mappings: list[tuple[int, ...]] = []
+    for session_index, (output, chunk) in enumerate(zip(session_outputs, chunks)):
+        local = _validate_rigid_pose_array(output.T_world_camera.array, label=f"DROID session {session_index}")
+        mapping = _droid_pose_source_indices(output, chunk)
+        if mapping is None:
+            if len(session_outputs) > 1:
+                raise StageResultError(f"DROID session {session_index} lacks exact source mapping; positional offsets are forbidden")
+            mapping = tuple(chunk)
+        if set(mapping) != set(chunk) or len(mapping) != len(chunk):
+            raise StageResultError(f"DROID session {session_index} mapping does not cover its exact source-keyed submission")
+        local_by_source = {source_id: local[slot] for slot, source_id in enumerate(mapping)}
+        if not merged:
+            merged.update(local_by_source)
+            mappings.append(mapping)
+            continue
+        overlap = tuple(sorted(set(merged).intersection(local_by_source)))
+        expected_overlap = chunks[session_index - 1][-DROID_SIM3_OVERLAP_FRAMES:]
+        if overlap != expected_overlap:
+            raise StageResultError(f"DROID session {session_index} overlap must equal the fixed exact canonical source-ID window")
+        anchor_source_id = expected_overlap[-1]
+        rotation, translation, report = _anchor_stitch_drift_diagnostics(
+            merged, local_by_source, overlap, anchor_source_id=anchor_source_id, session_index=session_index,
+        )
+        aligned: dict[int, np.ndarray] = {}
+        for source_id, pose in local_by_source.items():
+            value = np.eye(4, dtype=np.float64)
+            value[:3, :3] = rotation @ pose[:3, :3]
+            value[:3, 3] = rotation @ pose[:3, 3] + translation
+            aligned[source_id] = value
+        _validate_rigid_pose_array(np.stack([aligned[source_id] for source_id in mapping]), label=f"DROID session {session_index} anchored")
+        anchor_slot = mapping.index(anchor_source_id)
+        if mapping[:anchor_slot + 1] != overlap:
+            raise StageResultError(f"DROID session {session_index} anchor does not terminate the exact overlap")
+        unique_source_ids = mapping[anchor_slot + 1:]
+        if not unique_source_ids:
+            raise StageResultError(f"DROID session {session_index} has no unique source frames after anchor")
+        report = {**report, "seam": _validate_anchor_seam(
+            merged, aligned, anchor_source_id=anchor_source_id,
+            first_unique_source_id=unique_source_ids[0], session_index=session_index,
+        )}
+        for source_id in unique_source_ids:
+            if source_id in merged:
+                raise StageResultError(f"DROID session {session_index} anchor stitch would overwrite source frame {source_id}")
+            merged[source_id] = aligned[source_id]
+        reports.append(report)
+        mappings.append(mapping)
+    return merged, tuple(reports), tuple(mappings)
+
+
+def _normalize_droid_session_metric_gauge(
+    output: DroidFinalizeOutput,
+    *,
+    relative_gauge: float,
+    session_index: int,
+) -> DroidFinalizeOutput:
+    """Express one raw session in the first session's pre-final Metric3D gauge."""
+    gauge = float(relative_gauge)
+    if not np.isfinite(gauge) or gauge <= 0:
+        raise StageResultError(f"DROID session {session_index} relative Metric3D gauge must be finite and positive")
+    world = _validate_rigid_pose_array(output.T_world_camera.array, label=f"DROID session {session_index} raw")
+    normalized_world = world.copy()
+    normalized_world[:, :3, 3] *= gauge
+    normalized_world = _validate_rigid_pose_array(normalized_world, label=f"DROID session {session_index} metric-normalized")
+    camera = np.stack([np.linalg.inv(pose) for pose in normalized_world]).astype(np.float32)
+    provenance = {
+        **dict(output.scale_provenance),
+        "per_session_metric3d_relative_gauge": gauge,
+        "per_session_metric3d_normalization": "raw_camera_translation_multiplied_by_relative_gauge",
+    }
+    def tensor(source: TypedTensor, array: np.ndarray) -> TypedTensor:
+        return TypedTensor(array.astype(np.float32), source.units, source.coordinate_frame, source.tensor_index_order, source.semantic_tag, {**dict(source.provenance), **provenance}, source.pixel_transform)
+    return replace(output, T_world_camera=tensor(output.T_world_camera, normalized_world), T_camera_world=tensor(output.T_camera_world, camera), scale_provenance=provenance)
+
+
+def _aggregate_sim3_normalized_scale_evidence(
+    session_outputs: Sequence[DroidFinalizeOutput],
+    chunks: Sequence[tuple[int, ...]],
+    session_gauges: Sequence[float],
+) -> TypedTensor:
+    """Aggregate exact keyframe disparities after per-session Metric3D gauge normalization."""
+    if len(session_outputs) != len(chunks) or len(session_gauges) != len(chunks):
+        raise StageResultError("DROID scale evidence session cardinality is invalid")
+    rows: dict[int, np.ndarray] = {}
+    template: TypedTensor | None = None
+    provenance_rows: list[Mapping[str, object]] = []
+    for session_index, (output, chunk, gauge) in enumerate(zip(session_outputs, chunks, session_gauges)):
+        keyframes = _droid_keyframe_source_indices(output, chunk)
+        disparities = np.asarray(output.disparities.array, dtype=np.float32)
+        if keyframes is None or disparities.shape[0] != len(keyframes) or not np.isfinite(disparities).all() or not np.isfinite(gauge) or gauge <= 0:
+            raise StageResultError(f"DROID session {session_index} has invalid Metric3D-gauge scale evidence")
+        if template is None:
+            template = output.disparities
+        elif disparities.shape[1:] != template.shape[1:]:
+            raise StageResultError("DROID sessions have incompatible disparity grids for aggregate Metric3D evidence")
+        normalized = disparities / np.float32(gauge)
+        for source_id, disparity in zip(keyframes, normalized):
+            existing = rows.get(source_id)
+            if existing is not None and not np.allclose(existing, disparity, rtol=0.05, atol=1e-5):
+                raise StageResultError(f"DROID duplicate keyframe {source_id} disagrees after Metric3D gauge normalization")
+            rows.setdefault(source_id, np.ascontiguousarray(disparity))
+        provenance_rows.append({"session_index": session_index, "relative_gauge": float(gauge), "keyframe_count": len(keyframes)})
+    if template is None or not rows:
+        raise StageResultError("DROID aggregate Metric3D evidence is empty")
+    source_ids = tuple(sorted(rows))
+    array = np.stack([rows[source_id] for source_id in source_ids]).astype(np.float32)
+    mapping = [{"keyframe_index": index, "source_frame_id": str(source_id)} for index, source_id in enumerate(source_ids)]
+    provenance = {
+        **dict(template.provenance),
+        "keyframe_mapping": mapping,
+        "aggregate_source_frame_ids": list(source_ids),
+        "aggregate_session_evidence": provenance_rows,
+        "disparity_gauge": "inverse_depth_divided_by_per_session_metric3d_relative_gauge",
+        "video_level_metric3d_evidence": True,
+    }
+    return TypedTensor(array, template.units, template.coordinate_frame, template.tensor_index_order, template.semantic_tag, provenance, template.pixel_transform)
+
+
+def _densify_merged_droid_output(
+    output: DroidFinalizeOutput,
+    timeline: SourceTimeline,
+    coverage: DroidCoverage,
+    merged: Mapping[int, np.ndarray],
+    session_mappings: Sequence[tuple[int, ...]],
+    overlap_reports: Sequence[Mapping[str, object]],
+) -> DroidFinalizeOutput:
+    selected = tuple(index for index, sampled in enumerate(coverage.pose_sampled or ()) if sampled)
+    if tuple(sorted(merged)) != selected:
+        raise StageResultError("DROID merged source keys do not equal selected source schedule")
+    sampled_poses = np.stack([merged[index] for index in selected]).astype(np.float32)
+    world, sampled_mask = _interpolate_droid_poses(selected, sampled_poses, timeline.frame_count)
+    temporal_qc = _droid_temporal_qc(world, np.ones(timeline.frame_count, dtype=bool))
+    camera = np.linalg.inv(world).astype(np.float32)
+    provenance = {
+        **dict(output.scale_provenance),
+        "sampling": "source_keyed_sessions_per_session_metric3d_then_anchor_stitch_then_endpoint_inclusive_se3_interpolation",
+        "measured_source_frame_indices": list(selected),
+        "droid_pose_sampled": sampled_mask.tolist(),
+        "droid_pose_valid": [True] * timeline.frame_count,
+        "droid_session_source_mappings": [list(mapping) for mapping in session_mappings],
+        "droid_sim3_overlap_reports": [dict(row) for row in overlap_reports],
+        "effective_unique_coverage_count": coverage.submitted_count,
+        "actual_pushed_count": coverage.actual_pushed_count,
+        "droid_temporal_qc": temporal_qc,
+    }
+    def tensor(source: TypedTensor, array: np.ndarray) -> TypedTensor:
+        return TypedTensor(array, source.units, source.coordinate_frame, source.tensor_index_order, source.semantic_tag, {**dict(source.provenance), **provenance}, source.pixel_transform)
+    return replace(output, T_world_camera=tensor(output.T_world_camera, world), T_camera_world=tensor(output.T_camera_world, camera), scale_provenance={**dict(output.scale_provenance), **provenance})
 
 
 class FullVideoTimelineDriver:
@@ -1839,19 +2371,20 @@ class FullVideoTimelineDriver:
         if collector is not None:
             collector.local("wilor_build", module_timings_s["wilor_build"])
 
+        # DROID must consume masks derived from the completed WiLoR geometry;
+        # these stages are intentionally sequential, not concurrent lanes.
         wave2_start = time.monotonic()
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="wave2") as wave:
-            droid_future = wave.submit(self._run_droid, source, case_id, item, canonical, unidepth_records)
-            wilor_future = wave.submit(self._run_many_traced, "wilor.reconstruct", wilor_requests)
-            droid_records, droid_traces = droid_future.result()
-            wilor_records, wilor_trace = wilor_future.result()
+        wilor_records, wilor_trace = self._run_many_traced("wilor.reconstruct", wilor_requests)
+        droid_records, droid_traces = self._run_droid(
+            source, case_id, item, canonical, unidepth_records, detections, tracks, wilor_records,
+        )
         wave2_end = time.monotonic()
 
         base_traces = (
             RequestBatchTrace("wave1.concurrent_lanes", 2, 2, 2, (timeline.frame_count,), wave1_start, wave1_end),
             unidepth_trace,
             hands_trace,
-            RequestBatchTrace("wave2.concurrent_lanes", 2, 2, 2, (timeline.frame_count,), wave2_start, wave2_end),
+            RequestBatchTrace("wave2.sequential_wilor_then_droid", 1, 1, 1, (timeline.frame_count,), wave2_start, wave2_end),
             *droid_traces,
             wilor_trace,
         )
@@ -2280,6 +2813,10 @@ class FullVideoTimelineDriver:
         if len(records) != len(detections):
             raise StageResultError("WiLoR request/result detection count changed")
         candidates: list[_ManoCandidate] = []
+        # WiLoR detections are sparse; support metric wrist depth over only a
+        # short observed gap.  Long gaps remain unresolved and therefore cannot
+        # silently acquire a rendered hand.
+        depth_history: dict[HandSide, list[tuple[int, float]]] = {HandSide.LEFT: [], HandSide.RIGHT: []}
         for result, detection in zip(records, detections):
             output = result.output
             mano = output.mano
@@ -2295,6 +2832,15 @@ class FullVideoTimelineDriver:
                 joints_source_px[0],
                 detection,
             )
+            depth_inferred = False
+            if depth is not None:
+                depth_history[detection.side].append((detection.frame_index, depth))
+                depth_history[detection.side] = depth_history[detection.side][-15:]
+            else:
+                recent = [(frame, value) for frame, value in depth_history[detection.side] if detection.frame_index - frame <= 15]
+                if recent:
+                    depth = float(np.median([value for _, value in recent]))
+                    depth_inferred = True
             metric_geometry = _metric_wilor_geometry(vertices_root, joints_root, joints_source_px, depth, canonical.k_canonical)
             if metric_geometry is None:
                 vertices_camera = joints_camera = None
@@ -2311,8 +2857,8 @@ class FullVideoTimelineDriver:
                     camera_translation,
                     vertices_camera,
                     joints_camera,
-                    True,
-                    False,
+                    not depth_inferred,
+                    depth_inferred,
                     float(mano.uncertainty.array[slot]),
                     "wilor.reconstruct",
                     output.ownership.scope,
@@ -2329,147 +2875,216 @@ class FullVideoTimelineDriver:
         item_id: str,
         canonical: CanonicalKAggregation,
         unidepth_records: Sequence[AlgorithmResult[UniDepthOutput]],
+        detections: Sequence[HandDetectionRecord] = (),
+        tracks: Sequence[HandTrack] = (),
+        wilor_records: Sequence[AlgorithmResult[WiLoROutput]] = (),
     ) -> tuple[DroidExecutionRecords, tuple[RequestBatchTrace, ...]]:
-        if self.config.droid_fps is not None:
-            return self._run_scheduled_droid(source, case_id, item_id, canonical, unidepth_records)
-        create_results: list[AlgorithmResult[DroidCreateOutput]] = []
-        pushes_by_attempt: list[tuple[AlgorithmResult[DroidPushOutput], ...]] = []
-        finalize_results: list[AlgorithmResult[DroidFinalizeOutput]] = []
-        traces: list[RequestBatchTrace] = []
-        attempts = 1 + (1 if self.config.lower_filter_retry_thresh is not None else 0)
-        for attempt in range(attempts):
-            filter_thresh = None if attempt == 0 else self.config.lower_filter_retry_thresh
-            create, pushes, finalize, attempt_traces = self._run_droid_attempt(
-                source, case_id, item_id, canonical, unidepth_records, attempt, filter_thresh
-            )
-            create_results.append(create)
-            pushes_by_attempt.append(pushes)
-            finalize_results.append(finalize)
-            traces.extend(attempt_traces)
-            if finalize.output.keyframe_count > 1:
-                return DroidExecutionRecords(tuple(create_results), tuple(pushes_by_attempt), tuple(finalize_results), attempt, True, None, _droid_prefix_coverage(source.timeline.frame_count)), tuple(traces)
-            if attempt >= self.config.max_keyframe_retries or self.config.lower_filter_retry_thresh is None:
-                break
-        return DroidExecutionRecords(
-            tuple(create_results),
-            tuple(pushes_by_attempt),
-            tuple(finalize_results),
-            len(finalize_results) - 1,
-            False,
-            "remote_droid_insufficient_keyframes",
-            _droid_prefix_coverage(source.timeline.frame_count),
-        ), tuple(traces)
+        return self._run_droid_sessions(
+            source, case_id, item_id, canonical, unidepth_records, detections, tracks, wilor_records,
+        )
 
-    def _run_scheduled_droid(
+    def _droid_dynamic_masks(
+        self,
+        source: FrameSource,
+        selected_indices: Sequence[int],
+        detections: Sequence[HandDetectionRecord],
+        tracks: Sequence[HandTrack],
+        input_shape: tuple[int, int],
+        wilor_records: Sequence[AlgorithmResult[WiLoROutput]] = (),
+    ) -> dict[int, np.ndarray]:
+        """Rasterize anatomical hand tracks on the exact DROID input grid.
+
+        The same binary mask controls both RGB suppression and DROID BA weights:
+        1 means dynamic/ignored and 0 means static/retained, matching the
+        reference DROID ``video.masks > 0`` contract. Frame keys are source indices.
+        """
+        input_h, input_w = input_shape
+        sx, sy = input_w / source.timeline.width_px, input_h / source.timeline.height_px
+        boxes_by_frame: dict[int, list[tuple[float, float, float, float]]] = {}
+        tracked_ids = {record.detection_id for track in tracks for record in track.detections}
+        for detection in detections:
+            if tracks and detection.detection_id not in tracked_ids:
+                continue
+            if detection.occlusion_state != "out_of_frame":
+                boxes_by_frame.setdefault(int(detection.frame_index), []).append(detection.box_xyxy_source)
+        # Match the reference tracked-mask preparation: short internal detector
+        # gaps retain a linearly propagated box; leading/trailing/long gaps do not.
+        for track in tracks:
+            ordered = sorted(track.detections, key=lambda row: row.frame_index)
+            for left, right in zip(ordered[:-1], ordered[1:]):
+                gap = right.frame_index - left.frame_index
+                if gap <= 1 or gap - 1 > self.config.max_track_gap:
+                    continue
+                left_box = np.asarray(left.box_xyxy_source, dtype=np.float64)
+                right_box = np.asarray(right.box_xyxy_source, dtype=np.float64)
+                for offset in range(1, gap):
+                    alpha = offset / float(gap)
+                    box = tuple(((1.0 - alpha) * left_box + alpha * right_box).tolist())
+                    boxes_by_frame.setdefault(left.frame_index + offset, []).append(box)
+        # WiLoR requests/results are detection-ordered. Prefer same-frame
+        # projected MANO vertices; boxes are a deterministic fallback when the
+        # service omits projections or returns an invalid surface.
+        projected_by_frame: dict[int, list[np.ndarray]] = {}
+        for result, detection in zip(wilor_records, detections):
+            if tracks and detection.detection_id not in tracked_ids:
+                continue
+            vertices_tensor = getattr(result.output.mano, "vertices_source_px", None)
+            if vertices_tensor is None:
+                continue
+            vertices = np.asarray(vertices_tensor.array)
+            if vertices.ndim == 3:
+                vertices = vertices[0]
+            if vertices.shape == (778, 2) and np.isfinite(vertices).all():
+                projected_by_frame.setdefault(int(detection.frame_index), []).append(vertices)
+        masks: dict[int, np.ndarray] = {}
+        for frame_index in selected_indices:
+            mask = np.zeros((input_h, input_w), dtype=np.uint8)
+            projected = projected_by_frame.get(int(frame_index), ())
+            if projected:
+                import cv2
+                points = np.concatenate(projected, axis=0).astype(np.float32)
+                points[:, 0] *= np.float32(sx); points[:, 1] *= np.float32(sy)
+                hull = cv2.convexHull(points.reshape(-1, 1, 2).astype(np.float32))
+                cv2.fillConvexPoly(mask, hull.reshape(-1, 2).astype(np.int32), 1)
+                # Publish this selected source key before bypassing box fallback.
+                masks[int(frame_index)] = mask
+                continue
+            for box_row in boxes_by_frame.get(int(frame_index), ()):
+                box = np.asarray(box_row, dtype=np.float64)
+                if not np.isfinite(box).all():
+                    continue
+                x0 = max(0, min(input_w, int(math.floor(box[0] * sx))))
+                y0 = max(0, min(input_h, int(math.floor(box[1] * sy))))
+                x1 = max(0, min(input_w, int(math.ceil(box[2] * sx))))
+                y1 = max(0, min(input_h, int(math.ceil(box[3] * sy))))
+                if x0 < x1 and y0 < y1:
+                    mask[y0:y1, x0:x1] = 1
+            masks[int(frame_index)] = mask
+        return masks
+
+    def _run_droid_sessions(
         self,
         source: FrameSource,
         case_id: str,
         item_id: str,
         canonical: CanonicalKAggregation,
         unidepth_records: Sequence[AlgorithmResult[UniDepthOutput]],
+        detections: Sequence[HandDetectionRecord],
+        tracks: Sequence[HandTrack],
+        wilor_records: Sequence[AlgorithmResult[WiLoROutput]],
     ) -> tuple[DroidExecutionRecords, tuple[RequestBatchTrace, ...]]:
-        """Run endpoint-inclusive sparse DROID sessions and rigidly stitch them."""
-        assert self.config.droid_fps is not None
-        coverage = _droid_scheduled_coverage(source.timeline, self.config.droid_fps)
-        creates: list[AlgorithmResult[DroidCreateOutput]] = []
-        pushes_by_attempt: list[tuple[AlgorithmResult[DroidPushOutput], ...]] = []
-        finals: list[AlgorithmResult[DroidFinalizeOutput]] = []
-        traces: list[RequestBatchTrace] = []
-        local_poses: list[np.ndarray] = []
-        attempt_rows_by_chunk: list[tuple[DroidChunkAttemptOutcome, ...]] = []
-        retries_used = 0
-        for chunk_index, source_indices in enumerate(coverage.chunk_source_indices):
-            attempt_rows: list[DroidChunkAttemptOutcome] = []
-            try:
-                create, pushes, final, chunk_traces = self._run_droid_chunk(
-                    source, case_id, item_id, canonical, unidepth_records, chunk_index, source_indices,
-                    attempt=0, filter_thresh=None,
-                )
-                attempt_rows.append(DroidChunkAttemptOutcome(
-                    0,
-                    create.output.session_id,
-                    _scheduled_droid_options(
-                        chunk_index=chunk_index,
-                        submitted_frame_count=len(source_indices),
-                        droid_fps=self.config.droid_fps,
-                        attempt=0,
-                        filter_thresh=None,
-                    ),
-                    True,
-                ))
-            except DroidChunkFinalizeError as primary:
-                if (
-                    not primary.nonfinite_trajectory
-                    or self.config.lower_filter_retry_thresh is None
-                    or self.config.max_keyframe_retries != 1
-                ):
-                    raise
-                creates.append(primary.create_result)
-                pushes_by_attempt.append(primary.push_results)
-                traces.extend(primary.traces)
-                attempt_rows.append(primary.attempt_outcome())
-                retries_used += 1
-                try:
-                    create, pushes, final, chunk_traces = self._run_droid_chunk(
-                        source, case_id, item_id, canonical, unidepth_records, chunk_index, source_indices,
-                        attempt=1, filter_thresh=self.config.lower_filter_retry_thresh,
-                    )
-                except DroidChunkFinalizeError as retry:
-                    raise StageResultError(
-                        f"DROID chunk {chunk_index} nonfinite finalize recovery exhausted; "
-                        f"primary_session={primary.session_id} primary_options={primary.options} primary_error={primary.cause_type}: {primary.cause_message}; "
-                        f"retry_session={retry.session_id} retry_options={retry.options} retry_error={retry.cause_type}: {retry.cause_message}"
-                    ) from retry
-                attempt_rows.append(DroidChunkAttemptOutcome(
-                    1,
-                    create.output.session_id,
-                    _scheduled_droid_options(
-                        chunk_index=chunk_index,
-                        submitted_frame_count=len(source_indices),
-                        droid_fps=self.config.droid_fps,
-                        attempt=1,
-                        filter_thresh=self.config.lower_filter_retry_thresh,
-                    ),
-                    True,
-                ))
-            if final.output.T_world_camera.shape != (len(source_indices), 4, 4):
-                raise StageResultError(f"DROID chunk {chunk_index} returned pose count inconsistent with its sampled schedule")
-            creates.append(create)
-            pushes_by_attempt.append(pushes)
-            finals.append(final)
-            traces.extend(chunk_traces)
-            local_poses.append(np.asarray(final.output.T_world_camera.array, dtype=np.float32))
-            attempt_rows_by_chunk.append(tuple(attempt_rows))
-        stitch_started = time.monotonic()
-        stitched, continuity = _stitch_droid_chunk_poses(local_poses)
-        final_output = _densify_stitched_droid_output(finals[-1].output, source.timeline, coverage, stitched)
-        collector = getattr(self, "_timing_collector", None)
-        if collector is not None:
-            collector.local("droid", time.monotonic() - stitch_started)
-        final_result = replace(
-            finals[-1],
-            output=final_output,
-            provenance=(*finals[-1].provenance, {
-                "droid_stitched_chunks": len(coverage.chunk_source_indices),
-                "droid_finalize_retries_used": retries_used,
-                "droid_chunk_attempts": [[attempt.to_wire() for attempt in rows] for rows in attempt_rows_by_chunk],
-            }),
+        """Run independent capacity-bounded source-keyed sessions concurrently."""
+        timeline = source.timeline
+        selected = timeline.frame_indices if self.config.droid_fps is None else _droid_sample_source_indices(timeline, self.config.droid_fps)
+        chunks = _droid_chunks_with_overlap(selected)
+        sampled = np.zeros(timeline.frame_count, dtype=bool)
+        sampled[list(selected)] = True
+        coverage = DroidCoverage(
+            timeline.frame_count, len(selected), (True,) * timeline.frame_count,
+            tuple(bool(value) for value in sampled), chunks, self.config.droid_fps,
         )
-        finals[-1] = final_result
+        masks = self._droid_dynamic_masks(
+            source, selected, detections, tracks, _droid_input_shape_yx(timeline, self.config), wilor_records,
+        )
+        if set(masks) != set(selected):
+            raise StageResultError("DROID dynamic masks must cover every selected source key before session fanout")
+
+        def run_chunk(chunk_index: int, source_indices: tuple[int, ...]):
+            chunk_masks = {frame_index: masks[frame_index] for frame_index in source_indices}
+            return self._run_droid_chunk(
+                source, case_id, item_id, canonical, unidepth_records, chunk_index, source_indices,
+                attempt=0, static_confidence_masks=chunk_masks,
+            )
+
+        workers = min(len(chunks), self.config.droid_session_workers)
+        results: list[tuple[AlgorithmResult[DroidCreateOutput], tuple[AlgorithmResult[DroidPushOutput], ...], AlgorithmResult[DroidFinalizeOutput], tuple[RequestBatchTrace, ...]] | None] = [None] * len(chunks)
+        # The bounded executor submits whole lifecycle chains independently; the
+        # existing route dispatcher remains responsible for selecting replicas.
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="droid-session") as executor:
+            futures = {executor.submit(run_chunk, index, chunk): index for index, chunk in enumerate(chunks)}
+            for future, index in list(futures.items()):
+                results[index] = future.result()
+        completed = [result for result in results if result is not None]
+        if len(completed) != len(chunks):
+            raise StageResultError("DROID session executor did not complete every planned source-keyed session")
+        creates = tuple(result[0] for result in completed)
+        pushes_by_attempt = tuple(result[1] for result in completed)
+        finals = tuple(result[2] for result in completed)
+        traces = tuple(trace for result in completed for trace in result[3])
+        for chunk_index, (chunk, final) in enumerate(zip(chunks, finals)):
+            if final.output.T_world_camera.shape != (len(chunk), 4, 4):
+                raise StageResultError(f"DROID session {chunk_index} returned pose count inconsistent with its source-keyed schedule")
+        session_outputs = tuple(final.output for final in finals)
+        metric_scales, metric_reports = _estimate_metric3d_droid_scales(
+            session_outputs, chunks, timeline, masks, source, canonical.k_canonical,
+            hawor_root=self.config.droid_metric3d_hawor_root,
+            metric_checkpoint=self.config.droid_metric3d_checkpoint,
+            metric3d_python=self.config.droid_metric3d_python,
+            cuda_visible_devices=self.config.droid_metric3d_cuda_visible_devices,
+        )
+        metric_video_scale = float(metric_scales[0])
+        if not np.isfinite(metric_video_scale) or metric_video_scale <= 0:
+            raise StageResultError("video-level Metric3D DROID scale must be finite and positive")
+        metric_gauges = tuple(float(scale / metric_video_scale) for scale in metric_scales)
+        if any(not np.isfinite(gauge) or gauge <= 0 for gauge in metric_gauges):
+            raise StageResultError("DROID per-session Metric3D relative gauges must be finite and positive")
+        normalized_outputs = tuple(
+            _normalize_droid_session_metric_gauge(output, relative_gauge=gauge, session_index=index)
+            for index, (output, gauge) in enumerate(zip(session_outputs, metric_gauges))
+        )
+        merged, residuals, mappings = _merge_source_keyed_droid_sessions(normalized_outputs, chunks)
+        aggregate_disparities = _aggregate_sim3_normalized_scale_evidence(session_outputs, chunks, metric_gauges)
+        aggregate_provenance = {
+            "session_policy": "per_session_metric3d_then_anchor_stitch",
+            "session_source_indices": [list(chunk) for chunk in chunks],
+            "effective_unique_coverage_count": coverage.submitted_count,
+            "actual_pushed_count": coverage.actual_pushed_count,
+            "droid_session_workers": workers,
+            "droid_anchor_stitch_reports": [dict(row) for row in residuals],
+            "droid_anchor_source_frame_ids": [int(row["anchor_source_frame_id"]) for row in residuals],
+            "metric3d_session_scales": list(metric_scales),
+            "metric3d_video_scale": metric_video_scale,
+            "metric3d_relative_gauges": list(metric_gauges),
+            "metric3d_session_reports": [dict(row) for row in metric_reports],
+            "metric3d_evidence": "all_sessions_keyframes_per_session_metric3d_gauge_normalized",
+            "metric3d_scale_application": "video_level_scalar_applied_once_after_common_gauge_assembly",
+        }
+        aggregate_output = replace(
+            normalized_outputs[-1],
+            disparities=aggregate_disparities,
+            scale_provenance={**dict(normalized_outputs[-1].scale_provenance), **aggregate_provenance},
+        )
+        final_output = _densify_merged_droid_output(aggregate_output, timeline, coverage, merged, mappings, residuals)
+        final_output = _scale_droid_output_once(
+            final_output, timeline, selected, masks, source, canonical.k_canonical,
+            hawor_root=self.config.droid_metric3d_hawor_root,
+            metric_checkpoint=self.config.droid_metric3d_checkpoint,
+            metric3d_python=self.config.droid_metric3d_python,
+            cuda_visible_devices=self.config.droid_metric3d_cuda_visible_devices,
+            metric_scalar=metric_video_scale,
+            metric_report={"scale": metric_video_scale, "session_scales": list(metric_scales), "session_reports": [dict(row) for row in metric_reports]},
+        )
+        final_result = replace(finals[-1], output=final_output, provenance=(*finals[-1].provenance, aggregate_provenance))
+        finals = (*finals[:-1], final_result)
         outcomes = tuple(
             DroidChunkOutcome(
                 chunk_index=index,
                 source_indices=chunk,
                 session_id=final.output.session_id,
                 keyframe_count=final.output.keyframe_count,
-                stitch_boundary_translation_error_m=None if index == 0 else continuity[index - 1][0],
-                stitch_boundary_rotation_error_rad=None if index == 0 else continuity[index - 1][1],
-                attempts=attempt_rows_by_chunk[index],
+                stitch_boundary_translation_error_m=None if index == 0 else float(residuals[index - 1]["translation_residual_m"]),
+                stitch_boundary_rotation_error_rad=None if index == 0 else float(residuals[index - 1]["rotation_residual_rad"]),
+                attempts=(DroidChunkAttemptOutcome(0, final.output.session_id, _scheduled_droid_options(
+                    chunk_index=index, submitted_frame_count=len(chunk),
+                    droid_fps=self.config.droid_fps or timeline.fps, attempt=0, filter_thresh=None,
+                ), True),),
             )
-            for index, (chunk, final) in enumerate(zip(coverage.chunk_source_indices, finals))
+            for index, (chunk, final) in enumerate(zip(chunks, finals))
         )
-        blocker = None if all(outcome.keyframe_count > 1 for outcome in outcomes) else "remote_droid_insufficient_keyframes"
-        return DroidExecutionRecords(tuple(creates), tuple(pushes_by_attempt), tuple(finals), retries_used, blocker is None, blocker, coverage, outcomes), tuple(traces)
+        accepted = all(outcome.keyframe_count > 1 for outcome in outcomes)
+        blocker = None if accepted else "remote_droid_insufficient_keyframes"
+        return DroidExecutionRecords(creates, pushes_by_attempt, finals, 0, accepted, blocker, coverage, outcomes), traces
+
 
     def _run_droid_chunk(
         self,
@@ -2495,12 +3110,12 @@ class FullVideoTimelineDriver:
         input_to_source = np.linalg.inv(source_to_input_matrix)
         source_to_input_spatial = SpatialTransform("droid_input", timeline.width_px, timeline.height_px, _matrix_tuple(input_to_source), "source_pixels")
         input_to_model_spatial = SpatialTransform("droid_model", input_w, input_h, _matrix_tuple(np.diag([8.0, 8.0, 1.0])), "droid_input_pixels")
-        if self.config.droid_fps is None:
-            raise TimelineDriverError("scheduled DROID chunk requires target FPS")
+        if len(source_indices) > DROID_SERVICE_PUSH_CAPACITY or tuple(sorted(set(source_indices))) != source_indices:
+            raise TimelineDriverError("DROID session source keys must be strictly increasing and fit the 256-push capacity")
         options = _scheduled_droid_options(
             chunk_index=chunk_index,
             submitted_frame_count=len(source_indices),
-            droid_fps=self.config.droid_fps,
+            droid_fps=self.config.droid_fps or timeline.fps,
             attempt=attempt,
             filter_thresh=filter_thresh,
             frontend_thresh=frontend_thresh,
@@ -2528,22 +3143,17 @@ class FullVideoTimelineDriver:
                 if mask_array.shape != (input_h, input_w) or mask_array.dtype != np.uint8:
                     raise TimelineDriverError("DROID static-confidence mask must be uint8 on the exact DROID input grid")
                 if not np.all((mask_array == 0) | (mask_array == 1)):
-                    raise TimelineDriverError("DROID static-confidence mask values must be binary 0=dynamic,1=static")
+                    raise TimelineDriverError("DROID dynamic-ignore mask values must be binary 0=static,1=dynamic")
                 static_confidence_mask = TypedTensor(
-                    mask_array,
-                    "probability",
-                    "droid_input",
-                    "yx",
-                    "box_rasterized_static_confidence",
-                    {
-                        "frame_index": frame_index,
-                        "scheduled_chunk": chunk_index,
-                        "attempt": attempt,
-                        "value_semantics": "1=static_keep,0=dynamic_ignore",
-                    },
+                    mask_array, "probability", "droid_input", "yx", "hand_dynamic_ignore_mask_v1",
+                    {"frame_index": frame_index, "source_frame_index": frame_index, "scheduled_chunk": chunk_index, "attempt": attempt, "value_semantics": "1=dynamic_ignore,0=static_keep", "mask_provenance": "wilor_projected_surface_with_tracked_box_fallback"},
                     _matrix_tuple(input_to_source),
                 )
-            push_input = DroidPushInput(_ownership(case_id, item_id, timeline.source_id, "droid.push_frame", f"{attempt_scope}:frame:{frame_index:06d}"), create.output.session_id, frame_index, timeline.frames[frame_index].timestamp_s, TypedTensor(_resize_rgb(source.read_rgb(frame_index), (input_h, input_w)), "uint8_rgb", "droid_input", "hwc", "source_backed_droid_rgb_v1", {"frame_index": frame_index, "scheduled_chunk": chunk_index, "attempt": attempt}, _matrix_tuple(input_to_source)), payload, geometry.k_droid_input_four, static_confidence_mask, self.config.require_rgbd_capability, self.config.allow_monocular_droid_smoke)
+            rgb = _resize_rgb(source.read_rgb(frame_index), (input_h, input_w))
+            if static_confidence_mask is not None:
+                rgb = np.where(static_confidence_mask.array[..., None] > 0, 0, rgb).astype(np.uint8)
+            rgb_tensor = TypedTensor(rgb, "uint8_rgb", "droid_input", "hwc", "hand_dynamic_rgb_zeroed_v1", {"frame_index": frame_index, "source_frame_index": frame_index, "scheduled_chunk": chunk_index, "attempt": attempt, "mask_agreement": "rgb_zero_where_dynamic_ignore_positive"}, _matrix_tuple(input_to_source))
+            push_input = DroidPushInput(_ownership(case_id, item_id, timeline.source_id, "droid.push_frame", f"{attempt_scope}:frame:{frame_index:06d}"), create.output.session_id, frame_index, timeline.frames[frame_index].timestamp_s, rgb_tensor, payload, geometry.k_droid_input_four, static_confidence_mask, self.config.require_rgbd_capability, self.config.allow_monocular_droid_smoke)
             push_request = _request("droid.push_frame", case_id, item_id, timeline.metadata((frame_index,)), push_input, self.config.model_revisions["droid.push_frame"], native_shape=(1,), options=options)
             push = _typed_result(self._execute_timed(push_request), DroidPushOutput)
             if push.output.session_id != create.output.session_id or push.output.frame_index != frame_index:
@@ -2582,126 +3192,6 @@ class FullVideoTimelineDriver:
             RequestBatchTrace("droid.push_frame", len(source_indices), 1, route_for("droid.push_frame").native_batch_cap, (1,), push_started, push_completed),
             RequestBatchTrace("droid.finalize", 1, 1, 1, (1,), finalize_started, finalize_completed),
         )
-
-    def _run_droid_attempt(
-        self,
-        source: FrameSource,
-        case_id: str,
-        item_id: str,
-        canonical: CanonicalKAggregation,
-        unidepth_records: Sequence[AlgorithmResult[UniDepthOutput]],
-        attempt: int,
-        filter_thresh: float | None,
-    ) -> tuple[
-        AlgorithmResult[DroidCreateOutput],
-        tuple[AlgorithmResult[DroidPushOutput], ...],
-        AlgorithmResult[DroidFinalizeOutput],
-        tuple[RequestBatchTrace, ...],
-    ]:
-        timeline = source.timeline
-        input_h, input_w = _droid_input_shape_yx(timeline, self.config)
-        model_shape = (input_h // 8, input_w // 8)
-        p_source_to_input = np.array([[input_w / timeline.width_px, 0.0, 0.0], [0.0, input_h / timeline.height_px, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
-        p_input_to_model = np.diag([1.0 / 8.0, 1.0 / 8.0, 1.0])
-        geometry = DroidPixelGeometry(canonical.k_canonical, p_source_to_input, p_input_to_model, (input_h, input_w), model_shape)
-        input_to_source = np.linalg.inv(p_source_to_input)
-        model_to_input = np.linalg.inv(p_input_to_model)
-        source_to_input_spatial = SpatialTransform("droid_input", timeline.width_px, timeline.height_px, _matrix_tuple(input_to_source), "source_pixels")
-        input_to_model_spatial = SpatialTransform("droid_model", input_w, input_h, _matrix_tuple(model_to_input), "droid_input_pixels")
-        # The frozen resident accepts exactly the source prefix it can hold.
-        # Do not apply FPS sampling, repeat frames, or fill its unsubmitted tail.
-        droid_coverage = _droid_prefix_coverage(timeline.frame_count)
-        droid_indices = tuple(range(droid_coverage.submitted_count))
-        droid_buffer = _droid_session_buffer(len(droid_indices))
-        create_ownership = _ownership(case_id, item_id, timeline.source_id, "droid.create_session", f"attempt:{attempt}")
-        create_input = DroidCreateInput(
-            create_ownership,
-            timeline.metadata(),
-            geometry.k_droid_input_four,
-            source_to_input_spatial,
-            input_to_model_spatial,
-            model_shape,
-            self.config.require_rgbd_capability,
-            self.config.allow_monocular_droid_smoke,
-        )
-        options: dict[str, str | int | float | bool] = {"attempt": attempt, "buffer": droid_buffer}
-        if filter_thresh is not None:
-            options["filter_thresh"] = filter_thresh
-            options["bounded_lower_filter_retry"] = True
-        create_request = _request("droid.create_session", case_id, item_id, timeline.metadata(), create_input, self.config.model_revisions["droid.create_session"], native_shape=(1,), options=options)
-        create_started = time.monotonic()
-        create_result = self._execute_timed(create_request)
-        create_completed = time.monotonic()
-        create_typed = _typed_result(create_result, DroidCreateOutput)
-        self._validate_droid_capabilities(create_typed.output.capabilities)
-
-        pushes: list[AlgorithmResult[DroidPushOutput]] = []
-        push_started = time.monotonic()
-        for frame_index in droid_indices:
-            rgb = _resize_rgb(source.read_rgb(frame_index), (input_h, input_w))
-            depth_output = _nearest_unidepth_record(unidepth_records, frame_index).output
-            evidence = DepthEvidence(
-                np.asarray(depth_output.depth_m.array[0], dtype=np.float32),
-                np.asarray(depth_output.spatial.pixel_to_source, dtype=np.float64),
-                f"{timeline.source_id}:unidepth:{frame_index:06d}",
-                frame_index,
-                depth_output.spatial.grid_id,
-                np.asarray(depth_output.confidence.array[0], dtype=np.float32),
-                min_confidence=0.0,
-            )
-            payload = pack_native_sensor_depth(evidence, geometry)
-            ownership = _ownership(case_id, item_id, timeline.source_id, "droid.push_frame", f"attempt:{attempt}:frame:{frame_index:06d}")
-            push_input = DroidPushInput(
-                ownership,
-                create_typed.output.session_id,
-                frame_index,
-                timeline.frames[frame_index].timestamp_s,
-                TypedTensor(rgb, "uint8_rgb", "droid_input", "hwc", "source_backed_droid_rgb_v1", {"frame_index": frame_index}, _matrix_tuple(input_to_source)),
-                payload,
-                geometry.k_droid_input_four,
-                None,
-                self.config.require_rgbd_capability,
-                self.config.allow_monocular_droid_smoke,
-            )
-            push_request = _request("droid.push_frame", case_id, item_id, timeline.metadata((frame_index,)), push_input, self.config.model_revisions["droid.push_frame"], native_shape=(1,), options=options)
-            push_result = _typed_result(self._execute_timed(push_request), DroidPushOutput)
-            if push_result.output.session_id != create_typed.output.session_id or push_result.output.frame_index != frame_index:
-                raise StageResultError("DROID push output changed session/frame identity")
-            self._validate_droid_capabilities(push_result.output.capabilities)
-            pushes.append(push_result)
-        push_completed = time.monotonic()
-        finalize_ownership = _ownership(case_id, item_id, timeline.source_id, "droid.finalize", f"attempt:{attempt}")
-        finalize_input = DroidFinalizeInput(
-            finalize_ownership,
-            create_typed.output.session_id,
-            self.config.require_rgbd_capability,
-            self.config.allow_monocular_droid_smoke,
-        )
-        finalize_request = _request("droid.finalize", case_id, item_id, timeline.metadata(), finalize_input, self.config.model_revisions["droid.finalize"], native_shape=(1,), options=options)
-        finalize_started = time.monotonic()
-        finalize_result = _typed_result(self._execute_timed(finalize_request), DroidFinalizeOutput)
-        finalize_completed = time.monotonic()
-        densify_started = time.monotonic()
-        final = _densify_droid_output(finalize_result.output, timeline, droid_indices)
-        collector = getattr(self, "_timing_collector", None)
-        if collector is not None:
-            collector.local("droid", time.monotonic() - densify_started)
-        finalize_result = AlgorithmResult.from_request(finalize_request, output=final, native_batch_trace=finalize_result.native_batch_trace, provenance=finalize_result.provenance)
-        if final.session_id != create_typed.output.session_id:
-            raise StageResultError("DROID finalize changed session identity")
-        if final.T_world_camera.shape[0] != timeline.frame_count or final.T_camera_world.shape[0] != timeline.frame_count:
-            raise StageResultError("DROID finalize must retain one explicit camera slot per source frame")
-        if not np.array_equal(_droid_validity_from_output(final, timeline.frame_count), np.asarray(droid_coverage.pose_valid, dtype=bool)):
-            raise StageResultError("DROID finalized coverage does not match the submitted source prefix")
-        self._validate_droid_capabilities(final.capabilities)
-        if self.config.allow_monocular_droid_smoke and (final.acceptance or not final.diagnostic_only or final.scale_mode != "up_to_scale_monocular"):
-            raise StageResultError("diagnostic flags/scale/acceptance were not propagated")
-        traces = (
-            RequestBatchTrace("droid.create_session", 1, 1, 1, (1,), create_started, create_completed),
-            RequestBatchTrace("droid.push_frame", len(droid_indices), 1, route_for("droid.push_frame").native_batch_cap, (1,), push_started, push_completed),
-            RequestBatchTrace("droid.finalize", 1, 1, 1, (1,), finalize_started, finalize_completed),
-        )
-        return create_typed, tuple(pushes), finalize_result, traces
 
     def _validate_droid_capabilities(self, capabilities: DroidCapabilities) -> None:
         if self.config.require_rgbd_capability:
@@ -3161,7 +3651,18 @@ def plan_single_video(preflight: SingleVideoPreflight, config: FullVideoDriverCo
         "cosmos": "enabled" if config.cosmos_enabled else "disabled",
         "item_batch_size": config.item_batch_size,
         "coverage": {
-            "droid": ({"submission": "uniform_endpoint_inclusive_downsample_then_overlap_chunks_then_se3_slerp_interpolation", "target_fps": config.droid_fps, "service_push_capacity": DROID_SERVICE_PUSH_CAPACITY, "dense_pose_validity": "all_source_frames"} if config.droid_fps is not None else {"submission": f"source_indices_[0,min(N,{DROID_SERVICE_PUSH_CAPACITY}))", "tail": "explicit_missing_nan_with_validity_mask", "service_push_capacity": DROID_SERVICE_PUSH_CAPACITY}),
+            "droid": {
+                "submission": "source_keyed_sessions_at_most_256_pushes_then_fixed_64_frame_exact_overlap_sim3_merge",
+                "target_fps": config.droid_fps,
+                "none_policy": "every_source_frame",
+                "session_count": "one when <=256; otherwise one plus ceil((unique_selected_frames-256)/192)",
+                "terminate_count": "one_finalize_per_session",
+                "keyframe_buffer": config.droid_keyframe_buffer,
+                "session_workers": config.droid_session_workers,
+                "effective_unique_coverage": "all selected source frames",
+                "actual_push_count": "unique selected frames plus 64 exact canonical overlap pushes per session boundary",
+                "dense_pose_validity": "all_source_frames_after_endpoint_inclusive_interpolation",
+            },
             "hawor": {"length": 16, "stride": config.hawor_coverage.stride, "tail": config.hawor_coverage.tail},
             "infiller": {"length": 120, "features": 218, "stride": config.infiller_coverage.stride, "tail": config.infiller_coverage.tail},
         },

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import resource
 import time
 from dataclasses import asdict
@@ -23,6 +24,25 @@ from ego_annotation.physical_adapters import PhysicalArtifactAdapter
 # Capturing every Cosmos response for one item keeps later strict parse failures
 # inspectable without expanding the much larger HaWoR representative captures.
 COSMOS_STAGE_CAPTURE_LIMIT = 128
+DROID_FINALIZE_CAPTURE_ENV = "EGO_CAPTURE_DROID_FINALIZE_LIMIT"
+
+
+def stage_capture_limits_from_environment() -> dict[str, int]:
+    """Keep DROID finalize raw capture disabled unless an operator opts in."""
+    limits = {"cosmos3.reason": COSMOS_STAGE_CAPTURE_LIMIT}
+    raw = os.environ.get(DROID_FINALIZE_CAPTURE_ENV)
+    if raw is None or not raw.strip():
+        return limits
+    try:
+        limit = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{DROID_FINALIZE_CAPTURE_ENV} must be an integer >= 0") from exc
+    if limit < 0:
+        raise ValueError(f"{DROID_FINALIZE_CAPTURE_ENV} must be an integer >= 0")
+    if limit > 0:
+        limits["droid.finalize"] = limit
+    return limits
+
 
 STAGES = (
     "unidepth.infer",
@@ -169,7 +189,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             cosmos_enabled=True,
             service_origins=service_origins,
             stage_capture_root=str(args.run_root / "stage_captures"),
-            stage_capture_limits={"cosmos3.reason": COSMOS_STAGE_CAPTURE_LIMIT},
+            stage_capture_limits=stage_capture_limits_from_environment(),
         )
     )
     from ego_annotation.full_video_timeline import LiveFrozenApiStageClient

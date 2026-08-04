@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import inspect
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import threading
+import time
 
 import numpy as np
 import ego_annotation.full_video_timeline as full_video_timeline
@@ -20,9 +23,9 @@ from ego_annotation.full_video_timeline import (
     OpenCvFrameSource,
     PreflightError,
     SourceTimeline,
+    StageResultError,
     TimelineDriverError,
     plan_single_video,
-    _densify_droid_output,
     _droid_chunks_with_overlap,
     _droid_sample_source_indices,
     _droid_stride,
@@ -30,7 +33,6 @@ from ego_annotation.full_video_timeline import (
     _crop_transform,
     _scheduled_droid_options,
     _interpolate_droid_poses,
-    _stitch_droid_chunk_poses,
     DROID_SERVICE_PUSH_CAPACITY,
     DroidChunkFinalizeError,
     RequestBatchTrace,
@@ -238,7 +240,7 @@ def test_infiller_padding_keeps_unique_frozen_service_timestamps() -> None:
     assert len(set(timestamps)) == len(timestamps)
 
 
-def test_droid_submission_is_exact_256_prefix_with_explicit_missing_tail() -> None:
+def test_droid_submission_partitions_full_source_coverage_with_exact_overlap() -> None:
     short = _droid_prefix_coverage(200)
     exact = _droid_prefix_coverage(256)
     first_overflow = _droid_prefix_coverage(257)
@@ -246,23 +248,16 @@ def test_droid_submission_is_exact_256_prefix_with_explicit_missing_tail() -> No
 
     assert short.submitted_count == 200
     assert exact.submitted_count == DROID_SERVICE_PUSH_CAPACITY
-    assert first_overflow.submitted_count == DROID_SERVICE_PUSH_CAPACITY
-    assert first_overflow.unannotated_range == [256, 257]
-    assert long.submitted_count == DROID_SERVICE_PUSH_CAPACITY
-    assert tuple(index for index, valid in enumerate(long.pose_valid) if valid) == tuple(range(256))
-    assert not any(long.pose_valid[256:])
-    assert long.unannotated_range == [256, 1440]
-    assert long.to_wire() == {
-        "status": "completed_with_partial_camera_coverage",
-        "source_frame_count": 1440,
-        "submitted_count": 256,
-        "covered_source_range": [0, 256],
-        "unannotated_range": [256, 1440],
-        "unannotated_range_semantics": "[start_inclusive,end_exclusive)",
-        "reason": "service_capacity_256_exceeded",
-        "warnings": ["service_capacity_256_exceeded"],
-        "pose_validity": "per_frame_npz_mask; false means no DROID pose was submitted or inferred",
-    }
+    assert first_overflow.submitted_count == 257
+    assert tuple(map(len, first_overflow.chunk_source_indices)) == (256, 65)
+    assert first_overflow.chunk_source_indices[0][-64:] == first_overflow.chunk_source_indices[1][:64] == tuple(range(192, 256))
+    assert long.submitted_count == 1440
+    assert long.actual_pushed_count == 1888
+    assert all(long.pose_valid)
+    wire = long.to_wire()
+    assert wire["effective_unique_coverage_count"] == 1440
+    assert wire["actual_pushed_count"] == 1888
+    assert wire["overlap_push_count"] == 448
     assert _droid_session_buffer(155) == 155
     assert _droid_session_buffer(256) == 256
     assert _droid_session_buffer(1024) == 256
@@ -304,10 +299,10 @@ def test_first_2000_frame_droid_schedules_match_endpoint_and_256_overlap_invaria
 
     assert coverage_15.submitted_count == 1001
     assert coverage_10.submitted_count == 668
-    assert tuple(map(len, coverage_15.chunk_source_indices)) == (256, 256, 256, 236)
-    assert tuple(map(len, coverage_10.chunk_source_indices)) == (256, 256, 158)
+    assert tuple(map(len, coverage_15.chunk_source_indices)) == (256, 256, 256, 256, 233)
+    assert tuple(map(len, coverage_10.chunk_source_indices)) == (256, 256, 256, 92)
     assert all(len(chunk) <= DROID_SERVICE_PUSH_CAPACITY for chunk in (*coverage_15.chunk_source_indices, *coverage_10.chunk_source_indices))
-    assert all(left[-1] == right[0] for chunks in (coverage_15.chunk_source_indices, coverage_10.chunk_source_indices) for left, right in zip(chunks, chunks[1:]))
+    assert all(left[-64:] == right[:64] for chunks in (coverage_15.chunk_source_indices, coverage_10.chunk_source_indices) for left, right in zip(chunks, chunks[1:]))
     assert coverage_15.chunk_source_indices[0][0] == coverage_10.chunk_source_indices[0][0] == 0
     assert coverage_15.chunk_source_indices[-1][-1] == coverage_10.chunk_source_indices[-1][-1] == 1999
 
@@ -372,8 +367,9 @@ def test_scheduled_droid_coverage_includes_npz_reason() -> None:
 
     coverage = _droid_scheduled_coverage(source.timeline, 10.0)
 
-    assert coverage.to_wire()["status"] == "completed_diagnostic_stitched_interpolated"
-    assert coverage.to_wire()["reason"] == "diagnostic_stitched_interpolated"
+    assert coverage.to_wire()["status"] == "completed_source_keyed_session_dag"
+    assert coverage.to_wire()["session_policy"] == "at_most_256_pushes_fixed_64_frame_exact_source_overlap"
+    assert coverage.to_wire()["reason"] == "source_keyed_sessions_fixed_64_frame_overlap_then_sim3_merge"
 
 
 def test_scheduled_droid_lifecycle_propagates_truthful_monocular_capability_mode() -> None:
@@ -466,9 +462,11 @@ def test_scheduled_droid_lifecycle_propagates_truthful_monocular_capability_mode
     assert all(not result.output.capabilities.native_sensor_depth_consumed for result in (create, *pushes, final))
     assert all(request.options["buffer"] == DROID_SERVICE_PUSH_CAPACITY for request in client.requests)
     pushed_masks = [request.input.static_confidence_mask for request in client.requests if request.algorithm_id == "droid.push_frame"]
-    assert [mask.semantic_tag for mask in pushed_masks] == ["box_rasterized_static_confidence"] * len(source_indices)
-    assert [mask.provenance["value_semantics"] for mask in pushed_masks] == ["1=static_keep,0=dynamic_ignore"] * len(source_indices)
+    assert [mask.semantic_tag for mask in pushed_masks] == ["hand_dynamic_ignore_mask_v1"] * len(source_indices)
+    assert [mask.provenance["value_semantics"] for mask in pushed_masks] == ["1=dynamic_ignore,0=static_keep"] * len(source_indices)
     assert all(np.array_equal(mask.array, static_masks[index]) for mask, index in zip(pushed_masks, source_indices))
+    pushed_rgb = [request.input.rgb for request in client.requests if request.algorithm_id == "droid.push_frame"]
+    assert all(np.all(rgb.array[mask.array > 0] == 0) for rgb, mask in zip(pushed_rgb, pushed_masks))
     assert len(source_indices) < DROID_SERVICE_PUSH_CAPACITY
     assert len([request for request in client.requests if request.algorithm_id == "droid.push_frame"]) == len(source_indices)
     assert final.output.scale_mode == "up_to_scale_monocular"
@@ -476,164 +474,21 @@ def test_scheduled_droid_lifecycle_propagates_truthful_monocular_capability_mode
     assert final.output.acceptance is False
 
 
-def test_scheduled_droid_nonfinite_finalize_replays_same_chunk_once_with_fresh_session() -> None:
-    source = InMemoryFrameSource([np.zeros((8, 12, 3), dtype=np.uint8) for _ in range(5)], fps=30.0, source_id="recovery-fixture")
+def test_droid_session_finalize_failure_is_fail_closed() -> None:
+    source = make_source(5)
     driver = object.__new__(FullVideoTimelineDriver)
-    driver.config = FullVideoDriverConfig(
-        fps_condition="unidepth_full__droid_15fps",
-        require_rgbd_capability=False,
-        allow_monocular_droid_smoke=True,
-        lower_filter_retry_thresh=1.2,
-        max_keyframe_retries=1,
-    )
-    calls: list[tuple[tuple[int, ...], int, float | None]] = []
+    driver.config = FullVideoDriverConfig(fps_condition="unidepth_full__droid_15fps", require_rgbd_capability=False, allow_monocular_droid_smoke=True)
+    def fail(*args: object, **kwargs: object) -> object:
+        raise DroidChunkFinalizeError(chunk_index=0, attempt=0, session_id="failed", options={}, create_result=SimpleNamespace(), push_results=(), traces=(), cause=RuntimeError("finalize failed"))
+    driver._run_droid_chunk = fail
+    with pytest.raises(DroidChunkFinalizeError, match="finalize failed"):
+        driver._run_droid_sessions(source, "case", "item", SimpleNamespace(), (), (), (), ())
 
-    def result_request(stage: str, source_indices: tuple[int, ...], options: dict[str, object]) -> AlgorithmRequest[object]:
-        sampled = source.timeline.droid_sampled_metadata(source_indices)
-        return AlgorithmRequest(
-            stage,
-            "droid-v1",
-            "case",
-            "item",
-            source.timeline.source_id,
-            sampled,
-            StageMetadata(stage, "droid", stage, "droid-v1"),
-            NativeWorkDescription(stage, "droid-v1", None, 1, 1, (1,)),
-            None,
-            options,
-        )
-
-    def fake_chunk(
-        _source: InMemoryFrameSource,
-        _case_id: str,
-        _item_id: str,
-        _canonical: object,
-        _unidepth: object,
-        chunk_index: int,
-        source_indices: tuple[int, ...],
-        *,
-        attempt: int,
-        filter_thresh: float | None,
-    ) -> tuple[AlgorithmResult[DroidCreateOutput], tuple[AlgorithmResult[DroidPushOutput], ...], AlgorithmResult[DroidFinalizeOutput], tuple[RequestBatchTrace, ...]]:
-        calls.append((source_indices, attempt, filter_thresh))
-        options = {
-            "scheduled_chunk": chunk_index,
-            "buffer": DROID_SERVICE_PUSH_CAPACITY,
-            "droid_fps": 15.0,
-            "attempt": attempt,
-            **({"filter_thresh": filter_thresh, "bounded_lower_filter_retry": True} if filter_thresh is not None else {}),
-        }
-        create_request = result_request("droid.create_session", source_indices, options)
-        session_id = "primary-session" if attempt == 0 else "retry-session"
-        create = AlgorithmResult.from_request(
-            create_request,
-            output=DroidCreateOutput(Ownership("case", "item", source.timeline.source_id, "fixture", f"attempt:{attempt}"), session_id, DroidCapabilities.frozen_3572551()),
-        )
-        if attempt == 0:
-            raise DroidChunkFinalizeError(
-                chunk_index=chunk_index,
-                attempt=attempt,
-                session_id=session_id,
-                options=options,
-                create_result=create,
-                push_results=(),
-                traces=(),
-                cause=RuntimeError("CameraState.T_world_camera must contain only finite values"),
-            )
-        poses = np.repeat(np.eye(4, dtype=np.float32)[None], len(source_indices), axis=0)
-        finalize_request = result_request("droid.finalize", source_indices, options)
-        final = AlgorithmResult.from_request(
-            finalize_request,
-            output=DroidFinalizeOutput(
-                Ownership("case", "item", source.timeline.source_id, "fixture", "retry"),
-                session_id,
-                TypedTensor(poses, "metres", "world_from_camera", "tij", "world", {}),
-                TypedTensor(poses, "metres", "camera_from_world", "tij", "camera", {}),
-                TypedTensor(np.asarray([100.0, 100.0, 6.0, 4.0], dtype=np.float32), "pixels", "droid_input", "four", "K", {}),
-                TypedTensor(np.ones((1, 2, 2), dtype=np.float32), "inverse_metres", "droid_model", "tyx", "disparity", {}),
-                len(source_indices),
-                "up_to_scale_monocular",
-                DroidCapabilities.frozen_3572551(),
-                acceptance=False,
-                diagnostic_only=True,
-            ),
-        )
-        return create, (), final, ()
-
-    driver._run_droid_chunk = fake_chunk
-    records, _traces = driver._run_scheduled_droid(source, "case", "item", SimpleNamespace(), ())
-
-    assert calls == [((0, 2, 4), 0, None), ((0, 2, 4), 1, 1.2)]
-    assert records.retries_used == 1
-    assert records.accepted_trajectory is True
-    assert len(records.create_results) == 2
-    outcome, = records.chunk_outcomes
-    assert outcome.session_id == "retry-session"
-    assert [attempt.session_id for attempt in outcome.attempts] == ["primary-session", "retry-session"]
-    assert outcome.attempts[0].succeeded is False
-    assert "finite values" in str(outcome.attempts[0].error)
-    assert outcome.attempts[1].succeeded is True
-    assert outcome.attempts[1].options["filter_thresh"] == 1.2
-    assert outcome.source_indices == (0, 2, 4)
-    assert records.final.output.scale_mode == "up_to_scale_monocular"
-    assert records.final.output.diagnostic_only is True
-    assert records.final.output.acceptance is False
-    assert records.final.provenance[-1]["droid_finalize_retries_used"] == 1
-
-
-def test_scheduled_droid_retry_exhaustion_reports_both_session_causes() -> None:
-    source = InMemoryFrameSource([np.zeros((8, 12, 3), dtype=np.uint8) for _ in range(5)], fps=30.0, source_id="recovery-failure-fixture")
-    driver = object.__new__(FullVideoTimelineDriver)
-    driver.config = FullVideoDriverConfig(
-        fps_condition="unidepth_full__droid_15fps",
-        require_rgbd_capability=False,
-        allow_monocular_droid_smoke=True,
-        lower_filter_retry_thresh=1.2,
-        max_keyframe_retries=1,
-    )
-
-    def failed_chunk(
-        _source: InMemoryFrameSource,
-        _case_id: str,
-        _item_id: str,
-        _canonical: object,
-        _unidepth: object,
-        chunk_index: int,
-        source_indices: tuple[int, ...],
-        *,
-        attempt: int,
-        filter_thresh: float | None,
-    ) -> object:
-        session_id = "primary-session" if attempt == 0 else "retry-session"
-        options = {
-            "attempt": attempt,
-            "buffer": DROID_SERVICE_PUSH_CAPACITY,
-            **({"filter_thresh": filter_thresh, "bounded_lower_filter_retry": True} if filter_thresh is not None else {}),
-        }
-        create = SimpleNamespace(output=SimpleNamespace(session_id=session_id))
-        raise DroidChunkFinalizeError(
-            chunk_index=chunk_index,
-            attempt=attempt,
-            session_id=session_id,
-            options=options,
-            create_result=create,
-            push_results=(),
-            traces=(),
-            cause=RuntimeError("CameraState.T_world_camera must contain only finite values"),
-        )
-
-    driver._run_droid_chunk = failed_chunk
-
-    with pytest.raises(TimelineDriverError) as error:
-        driver._run_scheduled_droid(source, "case", "item", SimpleNamespace(), ())
-
-    message = str(error.value)
-    assert "recovery exhausted" in message
-    assert "primary_session=primary-session" in message
-    assert "retry_session=retry-session" in message
-    assert "filter_thresh" in message
-    assert "finite values" in message
-
+def test_droid_session_capacity_rejects_over_256_pushes() -> None:
+    source = make_source(257)
+    chunks = _droid_chunks_with_overlap(source.timeline.frame_indices)
+    assert tuple(map(len, chunks)) == (256, 65)
+    assert all(len(chunk) <= DROID_SERVICE_PUSH_CAPACITY for chunk in chunks)
 
 def test_explicit_droid_sampled_timelines_admit_stride_two_and_three_only_in_droid_envelopes() -> None:
     source = InMemoryFrameSource([np.zeros((8, 8, 3), dtype=np.uint8) for _ in range(11)], fps=30.0, source_id="sparse-fixture")
@@ -678,31 +533,17 @@ def test_sparse_indices_remain_invalid_for_dense_timeline_and_dense_frame_batche
         _validate_frame_batch(dense_tensor, (0, 2, 4), (0.0, 2.0 / 30.0, 4.0 / 30.0), "Hands", dtype="uint8", channels=3)
 
 
-def test_droid_chunk_gate_uses_256_push_sessions_with_one_sample_overlap() -> None:
+def test_droid_chunk_gate_uses_256_push_sessions_with_fixed_sim3_overlap() -> None:
     chunks_1001 = _droid_chunks_with_overlap(tuple(range(1001)))
     chunks_668 = _droid_chunks_with_overlap(tuple(range(668)))
 
-    assert tuple(map(len, chunks_1001)) == (256, 256, 256, 236)
-    assert tuple(map(len, chunks_668)) == (256, 256, 158)
+    assert tuple(map(len, chunks_1001)) == (256, 256, 256, 256, 233)
+    assert tuple(map(len, chunks_668)) == (256, 256, 256, 92)
     for chunks, count in ((chunks_1001, 1001), (chunks_668, 668)):
         assert all(len(chunk) <= 256 for chunk in chunks)
-        assert all(right[0] == left[-1] for left, right in zip(chunks[:-1], chunks[1:]))
-        flattened = tuple(index for chunk_index, chunk in enumerate(chunks) for index in (chunk if chunk_index == 0 else chunk[1:]))
+        assert all(right[:64] == left[-64:] for left, right in zip(chunks[:-1], chunks[1:]))
+        flattened = tuple(index for chunk_index, chunk in enumerate(chunks) for index in (chunk if chunk_index == 0 else chunk[64:]))
         assert flattened == tuple(range(count))
-
-
-def test_droid_se3_stitch_makes_overlap_boundaries_continuous() -> None:
-    def pose(x: float) -> np.ndarray:
-        value = np.eye(4, dtype=np.float32)
-        value[0, 3] = x
-        return value
-
-    stitched, continuity = _stitch_droid_chunk_poses((np.stack((pose(0.0), pose(1.0))), np.stack((pose(0.0), pose(0.5)))))
-
-    assert stitched.shape == (3, 4, 4)
-    assert stitched[:, 0, 3] == pytest.approx((0.0, 1.0, 1.5))
-    assert continuity[0][0] == pytest.approx(0.0)
-    assert continuity[0][1] == pytest.approx(0.0)
 
 
 def test_droid_full_timeline_interpolation_has_no_nan_and_marks_samples() -> None:
@@ -720,57 +561,17 @@ def test_droid_full_timeline_interpolation_has_no_nan_and_marks_samples() -> Non
     assert dense[1, :2, :2] == pytest.approx(np.array([[np.sqrt(0.5), -np.sqrt(0.5)], [np.sqrt(0.5), np.sqrt(0.5)]]), abs=1e-5)
 
 
-def test_droid_full_prefix_preserves_service_native_keyframe_disparities() -> None:
-    source = make_source(4)
-    poses = np.repeat(np.eye(4, dtype=np.float32)[None], 4, axis=0)
-    disparities = np.ones((1, 2, 2), dtype=np.float32)
-    tensor = lambda array, tag: TypedTensor(array, "unitless", "fixture", "tyx", tag, {})
-    output = DroidFinalizeOutput(
-        Ownership("case", "item", "fixture-video", "fixture-owner", "droid.finalize"),
-        "session",
-        tensor(poses, "world"),
-        tensor(poses, "camera"),
-        TypedTensor(np.ones(4, dtype=np.float32), "pixels", "fixture", "four", "K", {}),
-        tensor(disparities, "disparities"),
-        1,
-        "up_to_scale_monocular",
-        DroidCapabilities.frozen_3572551(),
-        acceptance=False,
-        diagnostic_only=True,
-    )
-
-    dense = _densify_droid_output(output, source.timeline, (0, 1, 2, 3))
-
-    assert dense.T_world_camera.shape == (4, 4, 4)
-    assert dense.T_camera_world.shape == (4, 4, 4)
-    assert np.isfinite(dense.T_world_camera.array).all()
-    assert dense.T_world_camera.provenance["droid_pose_valid"] == [True, True, True, True]
-    assert dense.disparities.shape == (1, 2, 2)
-    assert dense.disparities.provenance["sampling"] == "service_native_keyframe_tensor_preserved"
+def test_source_keyed_merge_rejects_positional_pose_assumption() -> None:
+    output = _two_frame_droid_output()
+    with pytest.raises(StageResultError, match="lacks exact source mapping"):
+        full_video_timeline._merge_source_keyed_droid_sessions((output, output), ((0, 1), (1, 2)))
 
 
-def test_droid_partial_prefix_output_never_synthesizes_tail_poses() -> None:
-    source = make_source(1440)
-    prefix = np.repeat(np.eye(4, dtype=np.float32)[None], 256, axis=0)
-    tensor = lambda array, tag: TypedTensor(array, "unitless", "fixture", "tyx", tag, {})
-    output = DroidFinalizeOutput(
-        Ownership("case", "item", "fixture-video", "fixture-owner", "droid.finalize"),
-        "session", tensor(prefix, "world"), tensor(prefix, "camera"),
-        TypedTensor(np.ones(4, dtype=np.float32), "pixels", "fixture", "four", "K", {}),
-        tensor(np.ones((1, 2, 2), dtype=np.float32), "disparities"), 2,
-        "up_to_scale_monocular", DroidCapabilities.frozen_3572551(), acceptance=False, diagnostic_only=True,
-    )
-
-    dense = _densify_droid_output(output, source.timeline, tuple(range(256)))
-
-    assert dense.T_world_camera.shape == (1440, 4, 4)
-    assert np.isfinite(dense.T_world_camera.array[:256]).all()
-    assert np.isnan(dense.T_world_camera.array[256:]).all()
-    assert dense.T_world_camera.provenance["droid_pose_valid"][:256] == [True] * 256
-    assert dense.T_world_camera.provenance["droid_pose_valid"][256:] == [False] * 1184
-    assert dense.T_world_camera.provenance["unannotated_range"] == [256, 1440]
-    assert dense.T_world_camera.provenance["reason"] == "service_capacity_256_exceeded"
-
+def test_source_keyed_merge_rejects_missing_mapping() -> None:
+    poses = np.repeat(np.eye(4, dtype=np.float32)[None], 2, axis=0)
+    output = _two_frame_droid_output()
+    with pytest.raises(StageResultError, match="lacks exact source mapping"):
+        full_video_timeline._merge_source_keyed_droid_sessions((output, output), ((0, 1), (1, 2)))
 
 def test_driver_config_keeps_single_outer_item_and_native_horizons() -> None:
     config = FullVideoDriverConfig(allow_monocular_droid_smoke=True, require_rgbd_capability=False)
@@ -1205,3 +1006,424 @@ def test_preflight_rejects_existing_fresh_root(tmp_path) -> None:
     # production path; this fixture only confirms its error type for an invalid input.
     with pytest.raises(PreflightError):
         preflight_single_video(path / "missing.mp4", case_id="case", fresh_root=path)
+
+
+def test_droid_finalize_rejects_non_rigid_pose_and_requires_inverse() -> None:
+    tensor = lambda array, frame, tag: TypedTensor(np.asarray(array, dtype=np.float32), "metres", frame, "tij", tag, {"droid_pose_valid": [True]})
+    world = np.eye(4, dtype=np.float32)[None]
+    camera = np.eye(4, dtype=np.float32)[None]
+    world[0, 0, 0] = 2.0
+    with pytest.raises(TypedContractError, match=r"SO\(3\)"):
+        DroidFinalizeOutput(
+            Ownership("case", "item", "source", "fixture", "droid.finalize"), "session",
+            tensor(world, "world_from_camera", "world"), tensor(camera, "camera_from_world", "camera"),
+            TypedTensor(np.asarray([100, 100, 8, 8], dtype=np.float32), "pixels", "source", "four", "K", {}),
+            TypedTensor(np.ones((1, 2, 2), dtype=np.float32), "inverse_metres", "droid", "tyx", "disp", {}),
+            1, "up_to_scale_monocular", DroidCapabilities.frozen_3572551(), acceptance=False, diagnostic_only=True,
+        )
+
+
+def test_droid_session_dag_plan_exposes_capacity_and_overlap() -> None:
+    config = FullVideoDriverConfig(
+        require_rgbd_capability=False,
+        allow_monocular_droid_smoke=True,
+    )
+    assert config.droid_keyframe_buffer == 256
+    assert "actual_push_count" in plan_single_video(
+        SimpleNamespace(
+            case_id="case", profile_id=None, fresh_root="/tmp/run",
+            timeline=make_source(3).timeline, checks=(),
+        ), config,
+    )["coverage"]["droid"]
+
+
+def test_dynamic_hand_mask_zeroes_exact_droid_input_box_and_preserves_frame_keys() -> None:
+    source = make_source(3)
+    driver = object.__new__(FullVideoTimelineDriver)
+    detection = HandDetectionRecord(
+        "hand:1", 1, source.timeline.frames[1].timestamp_s, HandSide.RIGHT,
+        (2.0, 2.0, 6.0, 6.0), 0.9, 1.0, 0.1, "visible",
+        Ownership("case", "item", source.timeline.source_id, "hands", "detection"),
+    )
+    masks = driver._droid_dynamic_masks(source, (1, 2), (detection,), (), (8, 12))
+    assert set(masks) == {1, 2}
+    assert masks[1].dtype == np.uint8
+    assert np.all(masks[1][2:6, 2:6] == 1)
+    assert np.all(masks[2] == 0)
+
+
+def test_world_visible_hand_formula_uses_raw_world_from_camera_rotation() -> None:
+    rotation = np.asarray([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, :3] = rotation
+    pose[:3, 3] = (1.0, 2.0, 3.0)
+    points = np.asarray([[2.0, 0.0, 4.0]], dtype=np.float32)
+    expected = points @ rotation.T + pose[:3, 3]
+    assert np.allclose(full_video_timeline._camera_points_to_world(points, pose), expected)
+
+
+def _z_pose(angle: float, translation=(0.0, 0.0, 0.0)) -> np.ndarray:
+    c, s = np.cos(angle), np.sin(angle)
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, :3] = np.asarray([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+    pose[:3, 3] = np.asarray(translation, dtype=np.float32)
+    return pose
+
+
+def test_droid_temporal_qc_rejects_parity_and_impossible_rotation() -> None:
+    smooth = np.stack([_z_pose(0.04 * index) for index in range(8)])
+    report = full_video_timeline._droid_temporal_qc(smooth, np.ones(8, dtype=bool))
+    assert report["status"] == "passed"
+    assert report["max_one_step_rotation_rad"] == pytest.approx(0.04, abs=1e-5)
+
+    alternating = np.stack([_z_pose(0.60 if index % 2 else 0.0) for index in range(8)])
+    with pytest.raises(StageResultError, match="parity-interleaved"):
+        full_video_timeline._droid_temporal_qc(alternating, np.ones(8, dtype=bool))
+
+    burst = np.stack([_z_pose(0.0), _z_pose(1.01)])
+    with pytest.raises(StageResultError, match="physically impossible"):
+        full_video_timeline._droid_temporal_qc(burst, np.ones(2, dtype=bool))
+
+
+def _two_frame_droid_output(*, provenance: dict[str, object] | None = None) -> DroidFinalizeOutput:
+    world = np.stack([_z_pose(0.0, (1.0, 2.0, 3.0)), _z_pose(0.1, (2.0, 3.0, 4.0))])
+    camera = np.linalg.inv(world).astype(np.float32)
+    tensor = lambda array, frame, tag, extra=None: TypedTensor(
+        np.asarray(array, dtype=np.float32), "metres", frame, "tij", tag, extra or {},
+    )
+    return DroidFinalizeOutput(
+        Ownership("case", "item", "source", "fixture", "droid.finalize"),
+        "session",
+        tensor(world, "world_from_camera", "world", {"droid_pose_valid": [True, True]}),
+        tensor(camera, "camera_from_world", "camera", {"droid_pose_valid": [True, True]}),
+        TypedTensor(np.asarray([100.0, 100.0, 4.0, 4.0], dtype=np.float32), "pixels", "source", "four", "K", {}),
+        TypedTensor(np.ones((2, 2, 2), dtype=np.float32), "inverse_metres", "droid", "tyx", "disp", provenance or {}),
+        2,
+        "up_to_scale_monocular",
+        DroidCapabilities.frozen_3572551(),
+        acceptance=False,
+        diagnostic_only=True,
+        scale_provenance={},
+    )
+
+
+def test_droid_mapping_parses_service_string_frame_ids() -> None:
+    output = _two_frame_droid_output(provenance={
+        "keyframe_mapping": [
+            {"keyframe_index": 0, "source_frame_id": "0", "source_timestamp_s": 0.0},
+            {"keyframe_index": 1, "source_frame_id": "1", "source_timestamp_s": 1 / 30},
+        ]
+    })
+    assert full_video_timeline._droid_keyframe_source_indices(output, (0, 1)) == (0, 1)
+    output = _two_frame_droid_output(provenance={"keyframe_mapping": ["fixture:frame:000000", "fixture:frame:000001"]})
+    assert full_video_timeline._droid_keyframe_source_indices(output, (0, 1)) == (0, 1)
+
+
+def test_metric3d_scale_changes_translation_once_and_preserves_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+    output = _two_frame_droid_output()
+    original_world = output.T_world_camera.array.copy()
+    monkeypatch.setattr(
+        full_video_timeline,
+        "_estimate_metric3d_droid_scale",
+        lambda *args, **kwargs: (2.0, {"status": "fixture"}),
+    )
+    source = make_source(2)
+    scaled = full_video_timeline._scale_droid_output_once(
+        output,
+        source.timeline,
+        (0, 1),
+        {0: np.ones((8, 8), dtype=np.uint8), 1: np.ones((8, 8), dtype=np.uint8)},
+        source,
+        np.eye(3, dtype=np.float32),
+        hawor_root="/fixture/hawor",
+        metric_checkpoint="/fixture/metric3d.pth",
+        metric3d_python="/fixture/python",
+        cuda_visible_devices="1",
+    )
+    assert np.allclose(scaled.T_world_camera.array[:, :3, :3], original_world[:, :3, :3])
+    assert np.allclose(scaled.T_world_camera.array[:, :3, 3], 2.0 * original_world[:, :3, 3])
+    assert np.allclose(
+        scaled.T_world_camera.array @ scaled.T_camera_world.array,
+        np.eye(4, dtype=np.float32),
+        atol=1e-5,
+    )
+    assert scaled.scale_provenance["translation_scale_applied"] is True
+    assert scaled.scale_provenance["scale_source"] == "Metric3D_est_scale_hybrid"
+
+
+def test_dynamic_hand_mask_tracks_short_internal_box_gap() -> None:
+    source = make_source(3)
+    owner = Ownership("case", "item", source.timeline.source_id, "hands", "track")
+    left = HandDetectionRecord("h0", 0, 0.0, HandSide.LEFT, (1.0, 1.0, 3.0, 3.0), 0.9, 1.0, 0.1, "visible", owner)
+    right = HandDetectionRecord("h2", 2, 0.5, HandSide.LEFT, (5.0, 3.0, 7.0, 5.0), 0.9, 1.0, 0.1, "visible", owner)
+    track = full_video_timeline.HandTrack("track", HandSide.LEFT, 0, 2, (left, right), ("visible", "unresolved", "visible"), (0.1, 1.0, 0.1))
+    driver = object.__new__(FullVideoTimelineDriver)
+    driver.config = FullVideoDriverConfig(require_rgbd_capability=False, allow_monocular_droid_smoke=True)
+    mask = driver._droid_dynamic_masks(source, (1,), (left, right), (track,), (8, 12))[1]
+    # Mid-gap box is the linear interpolation (3,2)-(5,4), positive=dynamic ignore.
+    assert np.all(mask[2:4, 3:5] == 1)
+    assert mask[0, 0] == 0
+
+
+def test_400_source_frames_create_two_capacity_bounded_overlapping_sessions() -> None:
+    source = make_source(400)
+    coverage = _droid_prefix_coverage(source.timeline.frame_count)
+    assert coverage.droid_fps is None
+    assert coverage.chunk_source_indices == (tuple(range(256)), tuple(range(192, 400)))
+    assert coverage.submitted_count == 400
+    assert coverage.actual_pushed_count == 464
+    assert coverage.to_wire()["effective_unique_coverage_count"] == 400
+    assert coverage.to_wire()["actual_pushed_count"] == 464
+
+
+def test_droid_sessions_execute_concurrently_finalize_once_and_merge_exact_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = make_source(400)
+    driver = object.__new__(FullVideoTimelineDriver)
+    driver.config = FullVideoDriverConfig(
+        require_rgbd_capability=False,
+        allow_monocular_droid_smoke=True,
+        droid_input_shape_yx=(8, 8),
+        droid_session_workers=2,
+    )
+    barrier = threading.Barrier(2)
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    finalizes: list[int] = []
+
+    def request_for(stage: str, indices: tuple[int, ...]) -> AlgorithmRequest[object]:
+        return AlgorithmRequest(
+            stage, "droid-v1", "case", "item", source.timeline.source_id,
+            source.timeline.droid_sampled_metadata(indices),
+            StageMetadata(stage, "droid", stage, "droid-v1"),
+            NativeWorkDescription(stage, "droid-v1", None, 1, 1, (1,)), None, {},
+        )
+
+    def fake_chunk(
+        _source: InMemoryFrameSource, _case: str, _item: str, _canonical: object, _unidepth: object,
+        chunk_index: int, indices: tuple[int, ...], **_kwargs: object,
+    ) -> tuple[AlgorithmResult[DroidCreateOutput], tuple[AlgorithmResult[DroidPushOutput], ...], AlgorithmResult[DroidFinalizeOutput], tuple[RequestBatchTrace, ...]]:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        barrier.wait(timeout=1.0)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        session_id = f"session-{chunk_index}"
+        poses = np.repeat(np.eye(4, dtype=np.float32)[None], len(indices), axis=0)
+        # Each session has an independent monocular gauge; IDs 192..255 support Sim(3).
+        poses[:, 0, 3] = np.asarray(indices, dtype=np.float32) - (192.0 if chunk_index else 0.0)
+        mapping = [{"source_frame_id": str(frame_index)} for frame_index in indices]
+        output = DroidFinalizeOutput(
+            Ownership("case", "item", source.timeline.source_id, "fixture", "droid.finalize"), session_id,
+            TypedTensor(poses, "metres", "world_from_camera", "tij", "world", {"dense_mapping": mapping}),
+            TypedTensor(np.linalg.inv(poses), "metres", "camera_from_world", "tij", "camera", {"dense_mapping": mapping}),
+            TypedTensor(np.asarray([100., 100., 6., 4.], dtype=np.float32), "pixels", "droid", "four", "K", {}),
+            TypedTensor(np.ones((len(indices), 1, 1), dtype=np.float32), "inverse_metres", "droid", "tyx", "disp", {"keyframe_mapping": mapping}),
+            2, "up_to_scale_monocular", DroidCapabilities.frozen_3572551(), acceptance=False, diagnostic_only=True,
+        )
+        finalizes.append(chunk_index)
+        create = AlgorithmResult.from_request(request_for("droid.create_session", indices), output=DroidCreateOutput(output.ownership, session_id, output.capabilities))
+        final = AlgorithmResult.from_request(request_for("droid.finalize", indices), output=output)
+        return create, (), final, ()
+
+    driver._run_droid_chunk = fake_chunk
+    monkeypatch.setattr(full_video_timeline, "_scale_droid_output_once", lambda output, *args, **kwargs: output)
+    monkeypatch.setattr(
+        full_video_timeline,
+        "_estimate_metric3d_droid_scales",
+        lambda outputs, chunks, *args, **kwargs: (
+            (1.0, 1.0),
+            tuple({"exact_keyframe_source_ids": list(chunk)} for chunk in chunks),
+        ),
+    )
+    records, _ = driver._run_droid_sessions(source, "case", "item", SimpleNamespace(k_canonical=np.eye(3)), (), (), (), ())
+
+    assert max_active == 2
+    assert sorted(finalizes) == [0, 1]
+    assert [len(pushes) for pushes in records.push_results_by_attempt] == [0, 0]
+    assert [len(outcome.source_indices) for outcome in records.chunk_outcomes] == [256, 208]
+    assert records.coverage.actual_pushed_count == 464
+    report = records.final.output.T_world_camera.provenance["droid_anchor_stitch_reports"][0]
+    assert report["boundary_source_frame_ids"] == list(range(192, 256))
+    assert report["anchor_source_frame_id"] == 255
+    assert report["translation_residual_m"] == pytest.approx(0.0)
+    assert report["rotation_residual_rad"] == pytest.approx(0.0)
+    assert records.final.output.T_world_camera.array[254:257, 0, 3] == pytest.approx((254.0, 255.0, 256.0))
+    assert records.final.output.disparities.shape == (400, 1, 1)
+    assert records.final.output.disparities.provenance["video_level_metric3d_evidence"] is True
+    assert records.final.output.disparities.provenance["aggregate_source_frame_ids"] == list(range(400))
+
+
+def test_projected_wilor_mask_branch_covers_every_selected_source_key() -> None:
+    source = make_source(3)
+    owner = Ownership("case", "item", source.timeline.source_id, "hands", "fixture")
+    detection = HandDetectionRecord("projected", 1, 0.25, HandSide.RIGHT, (0.0, 0.0, 1.0, 1.0), 0.9, 1.0, 0.1, "visible", owner)
+    projected = np.asarray([[2., 2.], [7., 2.], [7., 6.], [2., 6.]] + [[4., 4.]] * 774, dtype=np.float32)
+    wilor = SimpleNamespace(output=SimpleNamespace(mano=SimpleNamespace(vertices_source_px=TypedTensor(projected[None], "pixels", "source", "tv", "vertices", {}))))
+    driver = object.__new__(FullVideoTimelineDriver)
+    driver.config = FullVideoDriverConfig(require_rgbd_capability=False, allow_monocular_droid_smoke=True)
+    masks = driver._droid_dynamic_masks(source, (0, 1, 2), (detection,), (), (8, 12), (wilor,))
+    assert set(masks) == {0, 1, 2}
+    assert masks[1][4, 4] == 1
+    assert not masks[0].any() and not masks[2].any()
+
+
+def test_wrist_metric_lift_uses_unidepth_depth_and_source_intrinsics() -> None:
+    vertices = np.zeros((778, 3), dtype=np.float32)
+    joints = np.zeros((21, 3), dtype=np.float32)
+    projected = np.zeros((21, 2), dtype=np.float32)
+    projected[0] = (5.0, 3.0)
+    metric = full_video_timeline._metric_wilor_geometry(
+        vertices, joints, projected, 2.0,
+        np.asarray([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32),
+    )
+    assert metric is not None
+    metric_vertices, metric_joints, translation = metric
+    assert translation == pytest.approx((1.0, 0.6, 2.0))
+    assert metric_vertices[0] == pytest.approx(translation)
+    assert metric_joints[0] == pytest.approx(translation)
+
+
+def _sim3_session_output(
+    indices: tuple[int, ...],
+    *,
+    session_id: str,
+    local_from_global_scale: float = 1.0,
+    local_from_global_rotation: np.ndarray | None = None,
+    local_from_global_translation: np.ndarray | None = None,
+    degenerate: bool = False,
+) -> DroidFinalizeOutput:
+    rotation = np.eye(3) if local_from_global_rotation is None else np.asarray(local_from_global_rotation, dtype=np.float64)
+    translation = np.zeros(3) if local_from_global_translation is None else np.asarray(local_from_global_translation, dtype=np.float64)
+    global_poses = np.stack([_z_pose(0.002 * index, (0.2 * index, 0.03 * index, 0.01 * index)) for index in indices]).astype(np.float64)
+    if degenerate:
+        global_poses[:, :3, 3] = 0.0
+    poses = np.empty_like(global_poses)
+    for slot, global_pose in enumerate(global_poses):
+        poses[slot] = np.eye(4)
+        poses[slot, :3, :3] = rotation.T @ global_pose[:3, :3]
+        poses[slot, :3, 3] = rotation.T @ ((global_pose[:3, 3] - translation) / local_from_global_scale)
+    mapping = [{"source_frame_id": str(index)} for index in indices]
+    tensor = lambda array, frame, tag, provenance: TypedTensor(np.asarray(array, dtype=np.float32), "metres", frame, "tij", tag, provenance)
+    return DroidFinalizeOutput(
+        Ownership("case", "item", "source", "fixture", "droid.finalize"), session_id,
+        tensor(poses, "world_from_camera", "world", {"dense_mapping": mapping}),
+        tensor(np.linalg.inv(poses), "camera_from_world", "camera", {"dense_mapping": mapping}),
+        TypedTensor(np.asarray([100., 100., 4., 4.], dtype=np.float32), "pixels", "source", "four", "K", {}),
+        TypedTensor(np.full((len(indices), 1, 1), local_from_global_scale, dtype=np.float32), "inverse_metres", "droid", "tyx", "disp", {"keyframe_mapping": mapping}),
+        2, "up_to_scale_monocular", DroidCapabilities.frozen_3572551(), acceptance=False, diagnostic_only=True,
+    )
+
+
+def test_metric3d_gauge_anchor_merge_recovers_relative_scale_and_aggregates_keyframes() -> None:
+    left = tuple(range(128))
+    right = tuple(range(64, 192))
+    rotation = _z_pose(0.15)[:3, :3]
+    outputs = (
+        _sim3_session_output(left, session_id="left"),
+        _sim3_session_output(right, session_id="right", local_from_global_scale=2.5, local_from_global_rotation=rotation, local_from_global_translation=np.asarray((3.0, -2.0, 1.0))),
+    )
+    gauges = (1.0, 2.5)
+    normalized = tuple(
+        full_video_timeline._normalize_droid_session_metric_gauge(output, relative_gauge=gauge, session_index=index)
+        for index, (output, gauge) in enumerate(zip(outputs, gauges))
+    )
+    merged, reports, mappings = full_video_timeline._merge_source_keyed_droid_sessions(normalized, (left, right))
+    assert reports[0]["boundary_source_frame_ids"] == list(range(64, 128))
+    assert reports[0]["anchor_source_frame_id"] == 127
+    assert reports[0]["alignment_method"] == "exact_final_overlap_anchor_rigid"
+    assert reports[0]["translation_residual_m"] < 1e-5
+    assert reports[0]["rotation_residual_rad"] < 1e-3
+    assert merged[47][:3, 3] == pytest.approx((9.4, 1.41, 0.47), abs=1e-4)
+    evidence = full_video_timeline._aggregate_sim3_normalized_scale_evidence(outputs, (left, right), gauges)
+    assert evidence.shape == (192, 1, 1)
+    assert evidence.provenance["aggregate_source_frame_ids"] == list(range(192))
+    assert evidence.provenance["video_level_metric3d_evidence"] is True
+    assert np.allclose(evidence.array, 1.0)
+    assert mappings == (left, right)
+
+
+def test_anchor_merge_accepts_non_sim3_overlap_drift_when_temporal_qc_passes() -> None:
+    left = tuple(range(128))
+    right = tuple(range(64, 192))
+    raw = _sim3_session_output(right, session_id="right", local_from_global_scale=2.0)
+    world = raw.T_world_camera.array.copy()
+    for index, source_id in enumerate(right):
+        if source_id < 127:
+            world[index, 0, 3] += 0.002 * np.sin(float(source_id))
+    camera = np.linalg.inv(world).astype(np.float32)
+    drifted = replace(
+        raw,
+        T_world_camera=TypedTensor(world, "metres", "world_from_camera", "tij", "world", dict(raw.T_world_camera.provenance)),
+        T_camera_world=TypedTensor(camera, "metres", "camera_from_world", "tij", "camera", dict(raw.T_camera_world.provenance)),
+    )
+    outputs = (_sim3_session_output(left, session_id="left"), drifted)
+    normalized = tuple(
+        full_video_timeline._normalize_droid_session_metric_gauge(output, relative_gauge=gauge, session_index=index)
+        for index, (output, gauge) in enumerate(zip(outputs, (1.0, 2.0)))
+    )
+    merged, reports, _ = full_video_timeline._merge_source_keyed_droid_sessions(normalized, (left, right))
+    assert len(merged) == 192
+    assert reports[0]["alignment_method"] == "exact_final_overlap_anchor_rigid"
+    assert reports[0]["translation_residual_m"] > 0.0
+    assert reports[0]["anchor_source_frame_id"] == 127
+    temporal = full_video_timeline._droid_temporal_qc(np.stack([merged[index] for index in range(192)]), np.ones(192, dtype=bool))
+    assert temporal["status"] == "passed"
+
+
+def test_metric3d_multi_session_bridge_uses_one_shared_subprocess_and_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = make_source(4)
+    chunks = ((0, 1), (2, 3))
+    outputs = tuple(_two_frame_droid_output(provenance={"keyframe_mapping": [{"source_frame_id": str(index)} for index in chunk]}) for chunk in chunks)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(command)
+        geometry = Path(command[command.index("--multi-geometry") + 1])
+        output_path = Path(command[command.index("--output") + 1])
+        with np.load(geometry, allow_pickle=False) as archive:
+            assert int(archive["session_count"]) == 2
+            assert archive["session_0_tstamp"].tolist() == [0, 1]
+            assert archive["session_1_tstamp"].tolist() == [2, 3]
+        output_path.write_text(json.dumps({
+            "sessions": [
+                {"scale": 2.0, "report": {"exact_keyframe_source_ids": [0, 1]}},
+                {"scale": 5.0, "report": {"exact_keyframe_source_ids": [2, 3]}},
+            ],
+            "shared_metric3d": {"metric_model_load_count": 1, "metric_depth_pass_count": 4, "source_frame_count": 4},
+        }))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(full_video_timeline.subprocess, "run", fake_run)
+    scales, reports = full_video_timeline._estimate_metric3d_droid_scales(
+        outputs, chunks, source.timeline, {index: np.ones((8, 8), dtype=np.uint8) for index in range(4)}, source, np.eye(3),
+        hawor_root="/fixture", metric_checkpoint="/bin/true", metric3d_python="/bin/true", cuda_visible_devices="0",
+    )
+    assert len(calls) == 1
+    assert scales == pytest.approx((2.0, 5.0))
+    assert [report["exact_keyframe_source_ids"] for report in reports] == [[0, 1], [2, 3]]
+    assert all(report["shared_metric3d"]["metric_model_load_count"] == 1 for report in reports)
+
+
+def test_metric3d_gauge_and_mapping_fail_closed() -> None:
+    output = _two_frame_droid_output()
+    with pytest.raises(StageResultError, match="relative Metric3D gauge"):
+        full_video_timeline._normalize_droid_session_metric_gauge(output, relative_gauge=0.0, session_index=0)
+
+
+def test_sim3_merge_fails_closed_on_degenerate_overlap_baseline() -> None:
+    left = tuple(range(128))
+    right = tuple(range(64, 192))
+    outputs = (
+        _sim3_session_output(left, session_id="left", degenerate=True),
+        _sim3_session_output(right, session_id="right", local_from_global_scale=2.0, degenerate=True),
+    )
+    normalized = tuple(
+        full_video_timeline._normalize_droid_session_metric_gauge(output, relative_gauge=gauge, session_index=index)
+        for index, (output, gauge) in enumerate(zip(outputs, (1.0, 2.0)))
+    )
+    with pytest.raises(StageResultError, match="degenerate camera-center baseline"):
+        full_video_timeline._merge_source_keyed_droid_sessions(normalized, (left, right))

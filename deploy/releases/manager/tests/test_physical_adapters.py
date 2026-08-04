@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from ego_annotation.full_video_timeline import InMemoryFrameSource
-from ego_annotation.physical_adapters import HAND_EDGES, PhysicalAdapterError, PhysicalArtifactAdapter, _camera_centric_world_view, _build_world_view, _build_world_views, _draw_camera, _draw_projected_hand, _draw_projected_hand_2d, _project_world, _world_canvas, _world_to_camera_display, project_points, transform_points
+from ego_annotation.physical_adapters import HAND_EDGES, PhysicalAdapterError, PhysicalArtifactAdapter, _camera_centric_world_view, _build_world_view, _build_world_views, _draw_camera, _draw_projected_hand, _draw_projected_hand_2d, _project_world, _world_canvas, _world_to_camera_display, project_points, resize_to_cover, transform_points
 
 
 def test_transform_points_applies_world_from_camera_pose() -> None:
@@ -33,6 +33,15 @@ def test_project_points_keeps_depth_validity() -> None:
 def test_transform_rejects_bad_pose() -> None:
     with pytest.raises(PhysicalAdapterError):
         transform_points(np.zeros((2, 3), dtype=np.float32), np.eye(3, dtype=np.float32))
+
+
+def test_resize_to_cover_occupies_declared_pane_without_padding() -> None:
+    image = np.full((40, 80, 3), 17, dtype=np.uint8)
+    image[:, 20:60] = 231
+    pane = resize_to_cover(image, (64, 64))
+    assert pane.shape == (64, 64, 3)
+    assert np.count_nonzero(np.all(pane == 17, axis=2)) == 0
+    assert np.count_nonzero(np.all(pane == 231, axis=2)) > 0
 
 
 def test_world_canvas_skips_unobserved_nan_points() -> None:
@@ -86,7 +95,9 @@ def test_direct_crop_projection_draws_full_sized_hand_away_from_image_center_bug
 
 def test_combined_render_is_the_only_video_and_contains_full_timeline(tmp_path) -> None:
     cv2 = pytest.importorskip("cv2")
-    frame_count = 3
+    # Four frames make an accidental [N,4,4] pose-to-center reshape fail,
+    # guarding that render passes poses[:, :3, 3] into the world-view fitter.
+    frame_count = 4
     source = InMemoryFrameSource(
         [np.full((120, 160, 3), 40 + index * 20, dtype=np.uint8) for index in range(frame_count)],
         fps=5.0,
@@ -108,7 +119,8 @@ def test_combined_render_is_the_only_video_and_contains_full_timeline(tmp_path) 
     coverage = SimpleNamespace(
         source_frame_count=frame_count,
         submitted_count=frame_count,
-        unannotated_range=None,
+        # Current complete-coverage contract intentionally has no legacy
+        # unannotated_range field.
         pose_valid=tuple(True for _ in range(frame_count)),
         pose_sampled=tuple(True for _ in range(frame_count)),
         to_wire=lambda: {"status": "complete", "reason": None},
@@ -117,7 +129,10 @@ def test_combined_render_is_the_only_video_and_contains_full_timeline(tmp_path) 
         frame_count=frame_count,
         source_timeline=source.timeline,
         canonical_K=SimpleNamespace(k_canonical=np.asarray([[120.0, 0.0, 80.0], [0.0, 120.0, 60.0], [0.0, 0.0, 1.0]], dtype=np.float32)),
-        droid_records=SimpleNamespace(final=SimpleNamespace(output=SimpleNamespace(T_world_camera=tensor(poses, {"droid_pose_valid": valid}))), coverage=coverage),
+        droid_records=SimpleNamespace(final=SimpleNamespace(output=SimpleNamespace(
+            T_world_camera=tensor(poses, {"droid_pose_valid": valid}),
+            scale_provenance={"scale": 1.75, "scale_source": "Metric3D_est_scale_hybrid", "translation_scale_applied": True},
+        )), coverage=coverage),
         timeline_inference=SimpleNamespace(
             valid=tensor(np.ones((2, frame_count), dtype=bool)),
             vertices_camera_m=tensor(vertices),
@@ -151,6 +166,15 @@ def test_combined_render_is_the_only_video_and_contains_full_timeline(tmp_path) 
         assert physical["frame_idx"].shape == (frame_count,)
         assert physical["left_vertices_world_m"].shape == (frame_count, 778, 3)
         assert np.count_nonzero(physical["left_valid"]) == frame_count
+        np.testing.assert_array_equal(physical["pose_frame_idx"], np.arange(frame_count, dtype=np.int32))
+        assert physical["T_camera_wrist"].shape == (2, frame_count, 4, 4)
+        assert physical["T_world_wrist"].shape == (2, frame_count, 4, 4)
+        np.testing.assert_allclose(physical["T_world_wrist"], physical["T_world_camera"][None, ...] @ physical["T_camera_wrist"], equal_nan=True)
+        assert physical["wrist_pose_valid"].shape == (2, frame_count)
+        assert np.count_nonzero(physical["wrist_pose_valid"]) == 2 * frame_count
+        assert physical["droid_scale_scalar"][0] == pytest.approx(1.75)
+        assert json.loads(str(physical["droid_scale_provenance_json"][0]))["scale_source"] == "Metric3D_est_scale_hybrid"
+    assert report["droid_scale_provenance"]["translation_scale_applied"] is True
 
 
 def test_world_canvas_is_perspective_3d_with_metric_grid_and_trajectory() -> None:

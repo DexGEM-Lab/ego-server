@@ -122,7 +122,8 @@ require_executable "$PY"
 require_dir "$CODE"
 [[ -f $CODE/scripts/serve_v22_annotation_api.py ]] || die "missing API manager script"
 ensure_session
-if window_exists manager; then http_ready 8092 && { log "API manager already healthy"; exit 0; }; die "manager window exists but is unhealthy"; fi
+manager_ready() { local code; code=$(curl -sS -o /dev/null --max-time 3 -w "%{http_code}" "http://127.0.0.1:8092/docs" 2>/dev/null || true); [[ $code =~ ^2[0-9][0-9]$ ]]; }
+if window_exists manager; then manager_ready && { log "API manager already healthy"; exit 0; }; die "manager window exists but is unhealthy"; fi
 http_ready 28000 || die "UniDepth dispatcher port 28000 is not healthy"
 http_ready 28002 || die "DROID dispatcher port 28002 is not healthy"
 require_free_ports 8092
@@ -136,5 +137,5 @@ CMD
 )
 start_window manager "$CODE" "$cmd"
 deadline=$((SECONDS + 60))
-while (( SECONDS < deadline )); do http_ready 8092 && { log "API manager is healthy"; exit 0; }; sleep 1; done
+while (( SECONDS < deadline )); do manager_ready && { log "API manager is healthy"; exit 0; }; sleep 1; done
 die "API manager did not become healthy on 8092"

@@ -32,6 +32,7 @@ from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
 from ego_annotation.serving.batching import BatchPolicy, canonical_batch_size_fn
+from ego_annotation.serving.queue_budget import queued_request_capacity
 from ego_annotation.serving.binary_envelope import (
     CONTENT_TYPE as BINARY_ENVELOPE_CONTENT_TYPE,
     BinaryEnvelope,
@@ -129,7 +130,7 @@ def _in_cluster_tensor_resolver(data: Any, shape: tuple[int, ...], dtype: str) -
     num_replicas=1,
     ray_actor_options={"num_gpus": 1},
     max_ongoing_requests=16,
-    max_queued_requests=64,
+    max_queued_requests=queued_request_capacity("unidepth.infer"),
 )
 class UniDepthDeployment:
     def __init__(self) -> None:
