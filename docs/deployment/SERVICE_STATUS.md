@@ -6,7 +6,7 @@
  → ego-scale-caddy-1（Docker，host :8000/:8001 → 容器 :443；TLS + React 静态 + /api/* 反代）
  → ego-scale-api-1（uvicorn app.main:app；注册/api-keys/videos/annotation-jobs）
  → ego-scale-annotation-worker-1（无监听；上游 http://192.168.42.193:8093；并发 2）
- → provider PID 3319694（root tmux: ego_annotation:json-provider-v2；:8093）
+ → provider PID 3362147（root tmux: ego_annotation:json-provider-v2；:8093）
  → 每 job 子进程跑算法快照 9d006c3b…（git c013e19a）
  → Ray 车道（见下）
 ```
@@ -15,11 +15,11 @@
 - Caddy 镜像 `ego-scale-caddy:async-json-api-v1-r2-20260802`（容器 /srv 内置前端资产 index-BbF-WWw8.js）
 - API 镜像 `ego-scale-api:json-provider-v2-20260802`；DB `ego-scale-db-1`
 - Compose 源：`/root/dex-gem-ego-scale/deploy/`（Caddyfile、Dockerfiles；**未版本化**）
-- 算法适配器 release：`/home/zjh/ego_annotation_adapter_releases/json-direct-provider-v2-20260802-8ed619346f3fb0fe`
+- 算法适配器 release：`/home/zjh/ego_annotation_adapter_releases/json-direct-provider-v3json-20260805-c013e19a`
 - 生产配置：`/home/zjh/ego_annotation_adapter_runtime/json-direct-provider-v2-production/{adapter.env,run.sh}`（备份 adapter.env.bak-20260805T101200Z）
 
 ## 2026-08-05 快照切换（0fc2ef10 → c013e19a）
-- 旧 provider（PID 2986004，2026-08-02 启动）已终止；新 provider PID 3319694 于 10:12 UTC 启动，启动 digest 校验通过，:8093 正常监听。
+- 旧 provider（PID 2986004，2026-08-02 启动）已终止；新 provider PID 3362147 于 10:12 UTC 启动，启动 digest 校验通过，:8093 正常监听。
 - 新快照 14 项 gap/overlap 行为测试通过（20 帧排他边界、最终几何异侧分离、删除槽不回填）。
 - 退化输入（30 帧视频）被适配器按设计拒绝（completed_with_warnings → annotation_failed），属既有校验行为，非回归。
 - 10 秒真实视频端到端 smoke：进行中，结果见任务记录。
@@ -45,3 +45,8 @@
 2. 公网控制平面后端（dex-gem-ego-scale/backend+deploy）未版本化——最高优先级补齐。
 3. json-v1 venv 的 bin/pip shim 损坏（用 python -m pip）。
 4. Cosmos 模型缓存在 /home/ylang 下，迁移需显式复制。
+
+## 2026-08-05 契约层升级与端到端验证（补记）
+- 切换快照后暴露契约层版本差：适配器 release 内置 schema 仍是 v2，而当前管线产出 v3（新增 手部21点投影坐标）。已新建适配器 release json-direct-provider-v3json-20260805-c013e19a（仅替换 contracts schema 为 v3），run.sh 指向新 release（备份 run.sh.bak-20260805T103000Z），provider 重启为 PID 3362147。
+- 端到端验证通过：300 帧真实视频经 8093 适配器 POST /v1/annotation-jobs → status=succeeded（131s）→ 结果下载 200，产出 v3 JSON（完成状态=完成，含 手部21点投影坐标）。这是 worker 使用的同一条链路。
+- 三层版本必须一致：算法快照 / 适配器 schema / 前端-后端校验。以后变更产品 JSON 契约需同步发新适配器 release。
