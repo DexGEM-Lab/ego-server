@@ -7,11 +7,11 @@
 ## 代码仓库（三部分）
 | 部分 | 仓库 | 部署路径 | 说明 |
 |---|---|---|---|
-| 前端 | github.com/DexGEM-Lab/ego-frontend | /root/dex-gem-ego-scale/frontend | Vite+React+TS，pnpm 10.6.2，node 22.22.3（.nvmrc） |
+| 前端管理栈（含控制平面后端） | github.com/DexGEM-Lab/ego-frontend | /root/dex-gem-ego-scale | 整个 ego-scale：backend（FastAPI 注册/API Key/annotation-jobs/worker）+ frontend（Vite/React/TS）+ deploy（Caddyfile/Dockerfile）+ compose.yaml。前端 pnpm 10.6.2 / node 22.22.3。密钥 .env 与 .local-data 不入库。 |
 | 后端流程（算法） | github.com/DexGEM-Lab/ego_annotation（分支 ego_annotation_worktree） | /vePFS-Mindverse/user/yiwen/user-home/zjh/ego_annotation_worktree | 线上不直接跑该目录，跑其不可变快照 |
 | 服务端 | github.com/DexGEM-Lab/ego-server | /vePFS-Mindverse/user/yiwen/user-home/zjh/ego-server | 算法上游服务代码 |
 
-**缺口**：公网控制平面后端（注册/API Key/异步任务/队列，`/root/dex-gem-ego-scale/backend` + `deploy/`）目前**不在任何仓库**。没有它无法完整重建公网服务，建议尽快建第四个仓库（如 ego-scale）收纳。
+> 说明：公网控制平面后端（注册/API Key/异步任务/队列）与 deploy/compose 已随整个 `dex-gem-ego-scale` 收入 **ego-frontend** 仓库（commit 44f7d5c）；`.env`、`.local-data/` 等按仓库 `.gitignore` 排除。三仓库即可完整重建。
 
 ## Python 环境
 | 环境 | Python | 用途 | 关键包 |

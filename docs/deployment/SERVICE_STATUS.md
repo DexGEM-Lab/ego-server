@@ -42,7 +42,7 @@
 
 ## 已知缺口
 1. :31665 平台映射配置不在机器上，重建需平台侧配合。
-2. 公网控制平面后端（dex-gem-ego-scale/backend+deploy）未版本化——最高优先级补齐。
+2. （已解决）公网控制平面后端 + deploy 已入库 ego-frontend（whole dex-gem-ego-scale，commit 44f7d5c）。
 3. json-v1 venv 的 bin/pip shim 损坏（用 python -m pip）。
 4. Cosmos 模型缓存在 /home/ylang 下，迁移需显式复制。
 
